@@ -6,7 +6,7 @@ The goal is to turn a contractor/architect bid package into a traceable millwork
 
 ## Intended workflow
 
-1. **Ingest** bid-set PDFs, specifications, addenda, fixture schedules, finish schedules, responsibility schedules, CAD packages, historical quotes, submittals, RFIs, ASKs, field measurements, shop drawings, and historical purchasing/job-cost evidence.
+1. **Ingest** bid-set PDFs, specifications, addenda, fixture schedules, finish schedules, responsibility schedules, CAD packages, historical quotes, submittals, RFIs, ASKs, field measurements, shop drawings, historical cost-detail estimates, and purchasing/job-cost evidence.
 2. **Classify** project metadata, relevant sheets, divisions, vendor-furnished vs GC/subcontractor responsibilities, and millwork scope.
 3. **Extract** bid items with drawing/spec references, dimensions, materials, finishes, hardware, installation responsibility, custom/modification flags, and sustainability requirements.
 4. **Cross-check** plans, schedules, elevations, details, specs, addenda, responsibility tables, RFIs, ASKs, field measurements, shop drawings, and later bulletins for conflicts or omissions.
@@ -18,7 +18,7 @@ The goal is to turn a contractor/architect bid package into a traceable millwork
 
 ## V1 - usable now
 
-V1 is the evidence and revision-audit foundation. It does **not** invent prices. It is designed to make the estimator faster while keeping every decision reviewable.
+V1 is the evidence, revision-audit, and historical-calibration foundation. It does **not** invent prices. It is designed to make the estimator faster while keeping every decision reviewable.
 
 Install locally:
 
@@ -31,6 +31,14 @@ Parse a JTI quotation PDF and verify the displayed math:
 ```bash
 auto-bid-builder parse-quote "119236 Orrick Quote.pdf" -o quote.json
 ```
+
+Parse a historical JTI cost-detail estimate. This reconstructs each line's labor from the displayed labor-category hours/rates, validates sell-each and extended totals, and infers the pricing relationships actually present in that document rather than hard-coding a company-wide rate or markup:
+
+```bash
+auto-bid-builder parse-cost-detail "118331 cost detail.pdf" -o cost_detail.json
+```
+
+A historical cost detail is treated as **estimate/pricing evidence**, not automatically as realized job cost. In particular, projected hours, displayed labor dollars, material allowances and markups must remain distinct from later actual payroll, purchasing, subcontractor and rework data.
 
 Rank millwork-relevant pages in a drawing package or folder:
 
@@ -82,11 +90,13 @@ The revision audit writes:
 
 The V1 quote parser was tested against a real JTI quotation and parsed all displayed line items while reproducing the displayed total from the individual line amounts. Source customer documents and private project files are intentionally not stored in this public repository.
 
+The historical cost-detail parser was shaped against an awarded JTI job whose internal estimate contained per-item labor-category hours/rates, material allowance, material markup, manual add, tax, unit sell and extended sell. The parser reconstructs those displayed calculations and infers the document's rate/markup relationships without publishing or hard-coding private historical pricing.
+
 The revision-audit workflow was exercised against a real bid-basis drawing set and later bulletin. It detected estimator-relevant sheet changes including RFI references, cabinet/fabrication changes, and changed dimensions, then conservatively mapped those sheet-level changes back to quoted line items for human review. This is intentionally a review flag, not an automatic change-order conclusion.
 
 The project-lifecycle audit has also been shaped against real field-measure packages, original and revised JTI shop drawings, ASK/RFI documents, architectural millwork markups, and reviewed material/product submittals. Important distinction: an external trade's approved product submittal can be a **coordination input** without becoming JTI furnish/install scope.
 
-Historical purchasing packets from awarded work are now treated as **cost evidence**, including priced sales orders/invoices as well as unpriced packing lists, manifests, and delivery tickets. The system preserves unpriced evidence rather than dropping it and refuses to treat the visible purchase total as complete job cost unless coverage has independently been established.
+Historical purchasing packets from awarded work are treated as **cost evidence**, including priced sales orders/invoices as well as unpriced packing lists, manifests, and delivery tickets. The system preserves unpriced evidence rather than dropping it and refuses to treat the visible purchase total as complete job cost unless coverage has independently been established.
 
 ## Scope focus
 
@@ -108,7 +118,9 @@ Historical purchasing packets from awarded work are now treated as **cost eviden
 - Treat field-measure photos/handwritten dimensions as visual evidence requiring review when no reliable text layer is available.
 - Treat `REVISE AND RESUBMIT` and similar review states as unresolved fabrication inputs, not as silently approved finishes.
 - Keep other-trade product approvals separate from JTI cost responsibility while still tracking their dimensional/coordination impact on millwork.
+- Keep historical **estimated** cost-detail data separate from later **actual** job-cost evidence.
 - Keep historical vendor purchasing evidence separate from a complete job-cost conclusion; unpriced tickets, missing invoices, labor, outsourcing, install, freight/tax, overhead, and rework can materially change actual cost.
+- Contract/payment terms are project-specific; a quote/database terms code must not silently override negotiated subcontract terms.
 - Human estimator approval is required before a bid is considered final.
 
 ## Current implementation
@@ -117,7 +129,8 @@ Historical purchasing packets from awarded work are now treated as **cost eviden
 - Package inventory with ZIP/CAD awareness.
 - Conservative text signal extraction for millworker responsibility, custom work, field verification, materials, and dimensions.
 - JTI-style quote PDF parsing into numbered scope lines with quantity, sell-each, tax-each, amount, sheet references, and elevation references.
-- Quote arithmetic validation at line and document total level.
+- Historical JTI cost-detail parsing with labor-category hours/rates, materials, markup, manual adds, tax, unit sell, extended sell, aggregate validation, and inferred document-level calibration.
+- Quote and cost-detail arithmetic validation at line and document total level.
 - Millwork page relevance scan.
 - Project-lifecycle document classification for field measures, shop drawings/revisions, RFIs, ASKs, bulletins, quotes, and submittals.
 - Extraction of spec section, responsible contractor, finish codes, explicit review actions, and unresolved submittal flags.
@@ -125,7 +138,7 @@ Historical purchasing packets from awarded work are now treated as **cost eviden
 - Revision-impact extraction for finish codes, RFIs, dimensions, VIF/coordination notes, filler/notch changes, lighting, blocking, millwork, and other estimator-relevant signals.
 - Mapping from revised drawing sheets back to JTI quote lines that explicitly cite those sheets.
 - JSON and Markdown estimator-review outputs.
-- Regression tests use synthetic examples only; customer drawings, quotes, purchasing records, and pricing stay outside the public repository.
+- Regression tests use synthetic examples only; customer drawings, quotes, cost details, purchasing records, and pricing stay outside the public repository.
 
 ## Repository data policy
 
@@ -153,6 +166,6 @@ data/
   private/    # ignored
 ```
 
-The next major milestone is automatic **scope-item construction and takeoff** from bid documents, followed by pricing calibration from JTI historical internal estimates/actual job costs.
+The next major milestone is automatic **scope-item construction and takeoff** from bid documents, then linking those scope items to historical labor/material patterns and later actual job-cost evidence.
 
 Pricing automation will use JTI history rather than silently substituting generic construction unit prices.
