@@ -6,7 +6,7 @@ The goal is to turn a contractor/architect bid package into a traceable millwork
 
 ## Intended workflow
 
-1. **Ingest** bid-set PDFs, specifications, addenda, fixture schedules, finish schedules, responsibility schedules, CAD packages, historical quotes, submittals, RFIs, ASKs, field measurements, and shop drawings.
+1. **Ingest** bid-set PDFs, specifications, addenda, fixture schedules, finish schedules, responsibility schedules, CAD packages, historical quotes, submittals, RFIs, ASKs, field measurements, shop drawings, and historical purchasing/job-cost evidence.
 2. **Classify** project metadata, relevant sheets, divisions, vendor-furnished vs GC/subcontractor responsibilities, and millwork scope.
 3. **Extract** bid items with drawing/spec references, dimensions, materials, finishes, hardware, installation responsibility, custom/modification flags, and sustainability requirements.
 4. **Cross-check** plans, schedules, elevations, details, specs, addenda, responsibility tables, RFIs, ASKs, field measurements, shop drawings, and later bulletins for conflicts or omissions.
@@ -46,6 +46,22 @@ auto-bid-builder project-audit ./data/input/project_docs -o project_audit.json
 
 This also writes `project_audit.md` unless another Markdown path is supplied with `--markdown`.
 
+Normalize historical vendor purchases to CSV, then summarize the **known** purchasing evidence for an awarded job. Supplying the original quote adds an evidence-coverage ratio; it is deliberately not labeled as margin because purchasing packets may be incomplete and do not include labor/overhead automatically.
+
+```bash
+auto-bid-builder procurement-summary ./data/private/job_119236_purchases.csv \
+  --quote "119236 Orrick Quote.pdf" \
+  -o ./data/output/job_119236_procurement.json
+```
+
+The normalized CSV accepts these columns (additional columns are ignored):
+
+```text
+source,vendor,date,po,document_number,document_kind,item,description,quantity,uom,unit_cost,line_amount,freight,tax,document_total,priced
+```
+
+A single vendor document may occupy multiple rows. Document totals/freight/tax may be repeated on those rows; the summarizer counts each document-level value once and reports displayed-total vs component reconciliation deltas when enough evidence exists.
+
 Compare a later compiled bulletin against the bid-basis single-sheet PDFs and map estimator-relevant changes back to quoted line items:
 
 ```bash
@@ -70,6 +86,8 @@ The revision-audit workflow was exercised against a real bid-basis drawing set a
 
 The project-lifecycle audit has also been shaped against real field-measure packages, original and revised JTI shop drawings, ASK/RFI documents, architectural millwork markups, and reviewed material/product submittals. Important distinction: an external trade's approved product submittal can be a **coordination input** without becoming JTI furnish/install scope.
 
+Historical purchasing packets from awarded work are now treated as **cost evidence**, including priced sales orders/invoices as well as unpriced packing lists, manifests, and delivery tickets. The system preserves unpriced evidence rather than dropping it and refuses to treat the visible purchase total as complete job cost unless coverage has independently been established.
+
 ## Scope focus
 
 - Custom cabinetry and casework
@@ -90,6 +108,7 @@ The project-lifecycle audit has also been shaped against real field-measure pack
 - Treat field-measure photos/handwritten dimensions as visual evidence requiring review when no reliable text layer is available.
 - Treat `REVISE AND RESUBMIT` and similar review states as unresolved fabrication inputs, not as silently approved finishes.
 - Keep other-trade product approvals separate from JTI cost responsibility while still tracking their dimensional/coordination impact on millwork.
+- Keep historical vendor purchasing evidence separate from a complete job-cost conclusion; unpriced tickets, missing invoices, labor, outsourcing, install, freight/tax, overhead, and rework can materially change actual cost.
 - Human estimator approval is required before a bid is considered final.
 
 ## Current implementation
@@ -102,14 +121,15 @@ The project-lifecycle audit has also been shaped against real field-measure pack
 - Millwork page relevance scan.
 - Project-lifecycle document classification for field measures, shop drawings/revisions, RFIs, ASKs, bulletins, quotes, and submittals.
 - Extraction of spec section, responsible contractor, finish codes, explicit review actions, and unresolved submittal flags.
+- Historical procurement ledger normalization/summarization with priced and unpriced document coverage, vendor totals, reconciliation deltas, and optional quote-coverage calculation.
 - Revision-impact extraction for finish codes, RFIs, dimensions, VIF/coordination notes, filler/notch changes, lighting, blocking, millwork, and other estimator-relevant signals.
 - Mapping from revised drawing sheets back to JTI quote lines that explicitly cite those sheets.
 - JSON and Markdown estimator-review outputs.
-- Regression tests use synthetic examples only; customer drawings, quotes, and pricing stay outside the public repository.
+- Regression tests use synthetic examples only; customer drawings, quotes, purchasing records, and pricing stay outside the public repository.
 
 ## Repository data policy
 
-Real bid packages may contain copyrighted drawings, customer information, vendor contacts, pricing, and other non-public data. Do **not** commit raw project PDFs or private estimates to this public repository. Keep project inputs/outputs in ignored local directories or another approved private store.
+Real bid packages may contain copyrighted drawings, customer information, vendor contacts, pricing, and other non-public data. Do **not** commit raw project PDFs or private estimates/purchasing records to this public repository. Keep project inputs/outputs in ignored local directories or another approved private store.
 
 ## Planned layout
 
