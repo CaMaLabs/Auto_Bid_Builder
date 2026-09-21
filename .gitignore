@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+
+# Local/project-sensitive bid data
+data/input/**
+data/output/**
+data/private/**
+!data/input/.gitkeep
+!data/output/.gitkeep
+!data/private/.gitkeep
+
+# Typical raw bid artifacts kept local
+*.pdf
+*.dwg
+*.dxf
+*.rvt
+*.ifc
+*.xlsx
+*.xls
+*.csv
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
