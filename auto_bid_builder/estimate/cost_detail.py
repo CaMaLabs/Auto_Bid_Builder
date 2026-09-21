@@ -56,6 +56,44 @@ class CostDetailLine:
             return None
         return self.tax_each / self.materials_each
 
+    @property
+    def change_order_ref(self) -> str | None:
+        match = re.search(r"\bCO\s*#?\s*(\d+)\b", self.description, re.I)
+        if match:
+            return f"CO{int(match.group(1))}"
+        match = re.search(r"\bCHANGE\s+ORDER\s*#?\s*(\d+)\b", self.description, re.I)
+        if match:
+            return f"CO{int(match.group(1))}"
+        return None
+
+    @property
+    def is_change_order(self) -> bool:
+        return self.change_order_ref is not None
+
+    @property
+    def is_alternate(self) -> bool:
+        return bool(re.search(r"\balternate\b", self.description, re.I))
+
+    @property
+    def is_removed(self) -> bool:
+        return bool(re.search(r"\bremoved\s+from\s+scope\b", self.description, re.I))
+
+    @property
+    def inclusion_status(self) -> str:
+        if self.is_removed:
+            return "removed"
+        if self.is_change_order:
+            return "change_order"
+        if self.is_alternate:
+            return "alternate_selected" if self.quantity > 0 else "alternate_not_selected"
+        if self.quantity <= 0:
+            return "not_included"
+        return "base"
+
+    @property
+    def included_in_job_total(self) -> bool:
+        return self.quantity > 0
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.update(
@@ -67,6 +105,9 @@ class CostDetailLine:
             item_total_matches_display=abs(self.calculated_item_total - self.item_total) <= 0.01,
             markup_rate_on_materials=self.markup_rate_on_materials,
             tax_rate_on_materials=self.tax_rate_on_materials,
+            change_order_ref=self.change_order_ref,
+            inclusion_status=self.inclusion_status,
+            included_in_job_total=self.included_in_job_total,
         )
         return data
 
@@ -123,6 +164,26 @@ class CostDetailDocument:
         values = [x.tax_rate_on_materials for x in self.lines if x.tax_rate_on_materials is not None]
         return median(values) if values else None
 
+    @property
+    def change_order_total(self) -> float:
+        return round(sum(line.item_total for line in self.lines if line.is_change_order), 2)
+
+    @property
+    def selected_alternate_total(self) -> float:
+        return round(
+            sum(line.item_total for line in self.lines if line.is_alternate and line.quantity > 0),
+            2,
+        )
+
+    @property
+    def inferred_base_contract_total(self) -> float | None:
+        job_total = self.displayed_totals.job_total
+        if job_total is None:
+            job_total = self.calculated_totals.job_total
+        if job_total is None:
+            return None
+        return round(job_total - self.change_order_total, 2)
+
     def to_dict(self) -> dict[str, Any]:
         calculated = self.calculated_totals
         displayed = self.displayed_totals
@@ -139,12 +200,23 @@ class CostDetailDocument:
                 "material_markup_rate": self.inferred_material_markup_rate,
                 "material_tax_rate": self.inferred_material_tax_rate,
             },
+            "scope_accounting": {
+                "change_order_total": self.change_order_total,
+                "selected_alternate_total": self.selected_alternate_total,
+                "inferred_base_contract_total": self.inferred_base_contract_total,
+                "change_order_refs": sorted(
+                    {line.change_order_ref for line in self.lines if line.change_order_ref is not None}
+                ),
+            },
             "totals_match_display": _totals_match(calculated, displayed),
         }
 
 
 _PAGE_HEADER_RE = re.compile(r"(?m)^JOB\s+\d+\s+COST DETAIL.*?Page\s+\d+\s*$")
-_JOB_HEADER_RE = re.compile(r"(?m)^JOB\s+(?P<name>.+?)\s+(?P<terms>\d+(?:/\d+){1,5})\s+(?P<rep>[A-Z]{1,6})\s*$")
+_JOB_HEADER_WITH_TERMS_RE = re.compile(
+    r"(?m)^JOB\s+(?P<name>.+?)\s+(?P<terms>\d+(?:/\d+){1,5})\s+(?P<rep>[A-Z]{1,6})\s*$"
+)
+_JOB_HEADER_NO_TERMS_RE = re.compile(r"(?m)^JOB\s+(?P<name>.+?)\s+(?P<rep>[A-Z]{1,6})\s*$")
 _JOB_NUMBER_RE = re.compile(r"\bJOB\s+(\d+)\s+COST DETAIL\b", re.I)
 
 _LINE_RE = re.compile(
@@ -200,7 +272,16 @@ def _totals_match(calculated: CostDetailTotals, displayed: CostDetailTotals) -> 
 def parse_cost_detail_text(text: str) -> CostDetailDocument:
     job_number_match = _JOB_NUMBER_RE.search(text)
     clean = _PAGE_HEADER_RE.sub("", text)
-    header = _JOB_HEADER_RE.search(clean)
+    header = _JOB_HEADER_WITH_TERMS_RE.search(clean)
+    if header:
+        job_name = _clean(header.group("name"))
+        terms = header.group("terms")
+        rep = header.group("rep")
+    else:
+        header = _JOB_HEADER_NO_TERMS_RE.search(clean)
+        job_name = _clean(header.group("name")) if header else None
+        terms = None
+        rep = header.group("rep") if header else None
 
     lines: list[CostDetailLine] = []
     for match in _LINE_RE.finditer(clean):
@@ -242,9 +323,9 @@ def parse_cost_detail_text(text: str) -> CostDetailDocument:
 
     return CostDetailDocument(
         job_number=job_number_match.group(1) if job_number_match else None,
-        job_name=_clean(header.group("name")) if header else None,
-        terms=header.group("terms") if header else None,
-        rep=header.group("rep") if header else None,
+        job_name=job_name,
+        terms=terms,
+        rep=rep,
         lines=tuple(lines),
         displayed_totals=totals,
     )
