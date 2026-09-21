@@ -66,6 +66,10 @@ class QuoteDocument:
 
 
 _ITEM_HEADER_RE = re.compile(r"Item\s*Description\s+Qty\s+Each\s*Code\s*Tax\s+Each\s*Amount", re.I)
+_PRICE_ROW_RE = re.compile(
+    r"(?m)^\s*(?P<qty>\d+(?:\.\d+)?)\s+(?P<each>\d+\.\d{2})\s+"
+    r"(?P<code>[A-Z]{1,8})\s+(?P<tax>\d+\.\d{2})\s+(?P<amount>\d+\.\d{2})\s*$"
+)
 _LINE_WITH_PRICE_RE = re.compile(
     r"(?m)^\s*(?P<item>\d+)\s+(?P<desc>.*?)\s+"
     r"(?P<qty>\d+(?:\.\d+)?)\s+(?P<each>\d+\.\d{2})\s+"
@@ -115,22 +119,35 @@ def parse_jti_quote_text(text: str) -> QuoteDocument:
         block = text[start:end]
         if "General Notes" in block:
             block = block.split("General Notes", 1)[0]
+
         first = _LINE_WITH_PRICE_RE.search(block)
-        if not first:
-            continue
-        continuation = block[first.end():]
-        continuation = re.split(r"\bGeneral\s+Notes\b", continuation, maxsplit=1, flags=re.I)[0]
-        desc = _clean_description(first.group("desc") + " " + continuation)
+        if first:
+            item = int(first.group("item"))
+            price = first.groupdict()
+            continuation = block[first.end():]
+            continuation = re.split(r"\bGeneral\s+Notes\b", continuation, maxsplit=1, flags=re.I)[0]
+            desc = _clean_description(first.group("desc") + " " + continuation)
+        else:
+            item_match = re.match(r"\s*(\d+)\s+", block)
+            if not item_match:
+                continue
+            price_match = _PRICE_ROW_RE.search(block, item_match.end())
+            if not price_match:
+                continue
+            item = int(item_match.group(1))
+            price = price_match.groupdict()
+            desc = _clean_description(block[item_match.end():price_match.start()])
+
         sheets, elevations = _references(desc)
         lines.append(
             QuoteLine(
-                item=int(first.group("item")),
+                item=item,
                 description=desc,
-                quantity=float(first.group("qty")),
-                each=float(first.group("each")),
-                code=first.group("code"),
-                tax_each=float(first.group("tax")),
-                amount=float(first.group("amount")),
+                quantity=float(price["qty"]),
+                each=float(price["each"]),
+                code=price["code"],
+                tax_each=float(price["tax"]),
+                amount=float(price["amount"]),
                 sheet_refs=sheets,
                 elevation_refs=elevations,
             )
