@@ -26,13 +26,15 @@ class AutoBidBuilderApp(tk.Tk):
         self._busy = False
 
         self._build_ui()
-        self.after(250, self._startup_update_check)
+        self.after(350, self._maybe_show_onboarding)
+        self.after(900, self._startup_update_check)
 
     # ---------- shared UI ----------
     def _build_ui(self) -> None:
         header = ttk.Frame(self, padding=(14, 12, 14, 4))
         header.pack(fill="x")
         ttk.Label(header, text="Auto Bid Builder", font=("Segoe UI", 18, "bold")).pack(side="left")
+        ttk.Button(header, text="Getting started", command=self.show_onboarding).pack(side="right", padx=(8, 0))
         self.header_status = tk.StringVar(value="Ready")
         ttk.Label(header, textvariable=self.header_status).pack(side="right")
 
@@ -73,24 +75,121 @@ class AutoBidBuilderApp(tk.Tk):
 
     def _background_error(self, exc: Exception) -> None:
         self._set_busy(False, "Ready")
-        messagebox.showerror("Auto Bid Builder", f"{type(exc).__name__}: {exc}")
+        messagebox.showerror(
+            "Auto Bid Builder",
+            f"Something went wrong:\n\n{type(exc).__name__}: {exc}\n\nYou can keep using the app. Try the action again or open Sources & Settings to check the connection.",
+        )
 
     def _background_done(self, result, done) -> None:
         self._set_busy(False, "Ready")
         done(result)
+
+    # ---------- first-run onboarding ----------
+    def _maybe_show_onboarding(self) -> None:
+        if not self.settings.onboarding_complete:
+            self.show_onboarding(first_run=True)
+
+    def show_onboarding(self, first_run: bool = False) -> None:
+        win = tk.Toplevel(self)
+        win.title("Welcome to Auto Bid Builder")
+        win.transient(self)
+        win.grab_set()
+        win.resizable(False, False)
+
+        outer = ttk.Frame(win, padding=20)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(outer, text="Welcome to Auto Bid Builder", font=("Segoe UI", 18, "bold")).pack(anchor="w")
+        ttk.Label(
+            outer,
+            text="You do not need to understand APIs, Git, or estimating software to get started. The app can begin with public job sources and you can add company logins later.",
+            wraplength=650,
+        ).pack(anchor="w", pady=(6, 16))
+
+        steps = ttk.LabelFrame(outer, text="The normal workflow", padding=12)
+        steps.pack(fill="x")
+        for number, title, body in (
+            ("1", "Find jobs", "Auto Bid Builder checks the bid sources you have enabled and brings likely millwork work into one list."),
+            ("2", "Review a job", "Select a project, open the original listing, and make sure it is something JTI wants to pursue."),
+            ("3", "Start the bid", "Click Start bid and the app creates a clean project workspace for drawings, takeoff, estimate, and final output."),
+        ):
+            row = ttk.Frame(steps)
+            row.pack(fill="x", pady=5)
+            ttk.Label(row, text=number, font=("Segoe UI", 13, "bold"), width=3).pack(side="left", anchor="n")
+            text = ttk.Frame(row)
+            text.pack(side="left", fill="x", expand=True)
+            ttk.Label(text, text=title, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+            ttk.Label(text, text=body, wraplength=560).pack(anchor="w")
+
+        prefs = ttk.LabelFrame(outer, text="Recommended starting setup", padding=12)
+        prefs.pack(fill="x", pady=(14, 0))
+        ttk.Label(prefs, text="Search these states:").grid(row=0, column=0, sticky="w")
+        states_var = tk.StringVar(value=",".join(self.settings.preferred_states or ["CA", "NV"]))
+        ttk.Entry(prefs, textvariable=states_var, width=24).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        auto_updates_var = tk.BooleanVar(value=True if first_run else self.settings.auto_update)
+        ttk.Checkbutton(
+            prefs,
+            text="Keep Auto Bid Builder updated automatically",
+            variable=auto_updates_var,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        ttk.Label(
+            prefs,
+            text="The two public California sources are already enabled. Paid/private bid services can be added later in Sources & Settings.",
+            wraplength=600,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill="x", pady=(18, 0))
+
+        def finish(*, find_jobs: bool, configure_sources: bool = False) -> None:
+            self.settings.preferred_states = [x.strip().upper() for x in states_var.get().split(",") if x.strip()]
+            self.settings.check_updates_on_startup = True
+            self.settings.auto_update = bool(auto_updates_var.get())
+            self.settings.onboarding_complete = True
+            for provider in self.settings.providers:
+                if provider.kind in {"cca_public", "ca_dgs_resd"}:
+                    provider.enabled = True
+            save_settings(self.settings)
+            self.states_var.set(",".join(self.settings.preferred_states))
+            self.check_updates_var.set(self.settings.check_updates_on_startup)
+            self.auto_update_var.set(self.settings.auto_update)
+            win.destroy()
+            if configure_sources:
+                self.notebook.select(1)
+                self.status.set("Add any JTI bid-service logins here. Public sources already work without a login.")
+            elif find_jobs:
+                self.notebook.select(0)
+                self.sync_opportunities()
+
+        ttk.Button(buttons, text="Use recommended setup & find jobs", command=lambda: finish(find_jobs=True)).pack(side="right")
+        ttk.Button(buttons, text="Add company bid-service logins first", command=lambda: finish(find_jobs=False, configure_sources=True)).pack(side="right", padx=8)
+        ttk.Button(buttons, text="Close", command=lambda: finish(find_jobs=False)).pack(side="left")
+
+        win.protocol("WM_DELETE_WINDOW", lambda: finish(find_jobs=False))
+        win.update_idletasks()
+        x = self.winfo_rootx() + max(20, (self.winfo_width() - win.winfo_width()) // 2)
+        y = self.winfo_rooty() + max(20, (self.winfo_height() - win.winfo_height()) // 2)
+        win.geometry(f"+{x}+{y}")
 
     # ---------- opportunities ----------
     def _build_opportunities_tab(self) -> None:
         tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(tab, text="Opportunities")
 
+        guide = ttk.LabelFrame(tab, text="What to do here", padding=8)
+        guide.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            guide,
+            text="1. Click Find jobs now   →   2. Select a promising project   →   3. Open the original listing   →   4. Start the bid",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w")
+
         toolbar = ttk.Frame(tab)
         toolbar.pack(fill="x", pady=(0, 8))
-        self.sync_button = ttk.Button(toolbar, text="Sync opportunities", command=self.sync_opportunities)
+        self.sync_button = ttk.Button(toolbar, text="Find jobs now", command=self.sync_opportunities)
         self.sync_button.pack(side="left")
-        ttk.Button(toolbar, text="Open listing", command=self.open_selected_opportunity).pack(side="left", padx=6)
-        ttk.Button(toolbar, text="Start bid", command=self.start_bid).pack(side="left")
-        self.opportunity_summary = tk.StringVar(value="No opportunity sync run yet.")
+        ttk.Button(toolbar, text="Open original listing", command=self.open_selected_opportunity).pack(side="left", padx=6)
+        ttk.Button(toolbar, text="Start bid from selected job", command=self.start_bid).pack(side="left")
+        self.opportunity_summary = tk.StringVar(value="No job search run yet.")
         ttk.Label(toolbar, textvariable=self.opportunity_summary).pack(side="right")
 
         columns = ("score", "tier", "title", "source", "location", "due")
@@ -111,7 +210,7 @@ class AutoBidBuilderApp(tk.Tk):
         self._run_background(
             lambda: sync_opportunities(self.settings, self.secrets),
             self._render_opportunities,
-            message="Checking bid sources...",
+            message="Looking for jobs JTI may want to bid...",
         )
 
     def _render_opportunities(self, payload: dict) -> None:
@@ -137,13 +236,15 @@ class AutoBidBuilderApp(tk.Tk):
             )
         errors = payload.get("errors", [])
         self.opportunity_summary.set(
-            f"{payload.get('total_shown', 0)} shown / {payload.get('total_normalized', 0)} found"
+            f"{payload.get('total_shown', 0)} worth reviewing / {payload.get('total_normalized', 0)} found"
             + (f" • {len(errors)} source warning(s)" if errors else "")
         )
         if errors:
-            self.status.set("; ".join(f"{x.get('source')}: {x.get('error')}" for x in errors[:3]))
+            self.status.set("Some sources could not be checked. The others still worked. Open Sources & Settings if you want to fix them.")
+        elif payload.get("total_shown", 0):
+            self.status.set("Job search complete. Select a project to review it.")
         else:
-            self.status.set("Opportunity sync complete.")
+            self.status.set("Job search complete. Nothing met the current review threshold. You can lower the minimum score in Sources & Settings.")
 
     def _selected_opportunity(self) -> dict | None:
         selected = self.opp_tree.selection()
@@ -152,20 +253,20 @@ class AutoBidBuilderApp(tk.Tk):
     def open_selected_opportunity(self) -> None:
         row = self._selected_opportunity()
         if not row:
-            messagebox.showinfo("Auto Bid Builder", "Select an opportunity first.")
+            messagebox.showinfo("Auto Bid Builder", "Select a job from the list first, then click Open original listing.")
             return
         url = row.get("opportunity", {}).get("url")
         if not url:
-            messagebox.showinfo("Auto Bid Builder", "This source did not provide a public listing URL.")
+            messagebox.showinfo("Auto Bid Builder", "This source did not provide a public listing link. You can still keep the opportunity for review.")
             return
         webbrowser.open(url)
 
     def start_bid(self) -> None:
         row = self._selected_opportunity()
         if not row:
-            messagebox.showinfo("Auto Bid Builder", "Select an opportunity first.")
+            messagebox.showinfo("Auto Bid Builder", "Select the job you want to bid first.")
             return
-        folder = filedialog.askdirectory(title="Choose or create a folder for this bid")
+        folder = filedialog.askdirectory(title="Choose the folder where this bid should live")
         if not folder:
             return
         root = Path(folder)
@@ -173,12 +274,21 @@ class AutoBidBuilderApp(tk.Tk):
         (root / "opportunity.json").write_text(json.dumps(row, indent=2), encoding="utf-8")
         for name in ("bid_docs", "takeoff", "estimate", "output"):
             (root / name).mkdir(exist_ok=True)
-        messagebox.showinfo("Auto Bid Builder", f"Bid workspace created at:\n{root}")
+        messagebox.showinfo(
+            "Bid workspace ready",
+            f"The bid folder is ready:\n\n{root}\n\nNext: put the plans/specs in the bid_docs folder. Auto Bid Builder will use that folder for the project review and takeoff workflow.",
+        )
 
     # ---------- settings/providers ----------
     def _build_sources_tab(self) -> None:
         tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(tab, text="Sources & Settings")
+
+        ttk.Label(
+            tab,
+            text="Public sources work without a login. Only add credentials for services JTI actually uses. Passwords and API keys are stored outside the project repository.",
+            wraplength=900,
+        ).pack(anchor="w", pady=(0, 8))
 
         general = ttk.LabelFrame(tab, text="Opportunity search", padding=10)
         general.pack(fill="x")
@@ -187,11 +297,11 @@ class AutoBidBuilderApp(tk.Tk):
         self.min_score_var = tk.StringVar(value=f"{self.settings.minimum_score:g}")
         ttk.Label(general, text="Preferred states").grid(row=0, column=0, sticky="w")
         ttk.Entry(general, textvariable=self.states_var, width=22).grid(row=1, column=0, sticky="ew", padx=(0, 10))
-        ttk.Label(general, text="Lookback days").grid(row=0, column=1, sticky="w")
+        ttk.Label(general, text="Look back this many days").grid(row=0, column=1, sticky="w")
         ttk.Entry(general, textvariable=self.lookback_var, width=12).grid(row=1, column=1, sticky="w", padx=(0, 10))
-        ttk.Label(general, text="Minimum score").grid(row=0, column=2, sticky="w")
+        ttk.Label(general, text="Minimum review score").grid(row=0, column=2, sticky="w")
         ttk.Entry(general, textvariable=self.min_score_var, width=12).grid(row=1, column=2, sticky="w")
-        ttk.Button(general, text="Save", command=self.save_general_settings).grid(row=1, column=3, padx=12)
+        ttk.Button(general, text="Save search settings", command=self.save_general_settings).grid(row=1, column=3, padx=12)
         general.columnconfigure(0, weight=1)
 
         area = ttk.Frame(tab)
@@ -211,7 +321,7 @@ class AutoBidBuilderApp(tk.Tk):
         self.provider_notes = tk.StringVar(value="")
         ttk.Label(right, textvariable=self.provider_notes, wraplength=650).pack(anchor="w", pady=(2, 10))
         self.provider_enabled_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(right, text="Enabled", variable=self.provider_enabled_var).pack(anchor="w")
+        ttk.Checkbutton(right, text="Use this source when finding jobs", variable=self.provider_enabled_var).pack(anchor="w")
 
         self.provider_base_label = ttk.Label(right, text="Base URL")
         self.provider_base_var = tk.StringVar()
@@ -221,7 +331,7 @@ class AutoBidBuilderApp(tk.Tk):
         self.provider_feed_entry = ttk.Entry(right, textvariable=self.provider_feed_var)
         self.provider_secret_frame = ttk.Frame(right)
         self.provider_secret_frame.pack(fill="x", pady=(8, 0))
-        ttk.Button(right, text="Save outlet", command=self.save_provider).pack(anchor="e", pady=(12, 0))
+        ttk.Button(right, text="Save this source", command=self.save_provider).pack(anchor="e", pady=(12, 0))
 
         if self.settings.providers:
             self.provider_list.selection_set(0)
@@ -233,7 +343,7 @@ class AutoBidBuilderApp(tk.Tk):
             self.settings.lookback_days = max(1, int(self.lookback_var.get()))
             self.settings.minimum_score = float(self.min_score_var.get())
         except ValueError:
-            messagebox.showerror("Auto Bid Builder", "Lookback days and minimum score must be numeric.")
+            messagebox.showerror("Auto Bid Builder", "Lookback days and minimum score must be numbers.")
             return
         save_settings(self.settings)
         self.status.set("Search settings saved.")
@@ -263,7 +373,7 @@ class AutoBidBuilderApp(tk.Tk):
         for field_name in provider.credential_fields:
             var = tk.StringVar()
             self._provider_secret_vars[field_name] = var
-            configured = "configured" if self.secrets.has(provider.id, field_name) else "not set"
+            configured = "already saved" if self.secrets.has(provider.id, field_name) else "not set"
             ttk.Label(self.provider_secret_frame, text=f"{field_name.replace('_', ' ').title()} ({configured})").pack(anchor="w", pady=(6, 0))
             ttk.Entry(self.provider_secret_frame, textvariable=var, show="*").pack(fill="x")
 
@@ -292,13 +402,18 @@ class AutoBidBuilderApp(tk.Tk):
         tab = ttk.Frame(self.notebook, padding=16)
         self.notebook.add(tab, text="Updates")
 
+        ttk.Label(
+            tab,
+            text="Recommended: leave update checks on. Automatic updates only install when the app can safely fast-forward without overwriting local source changes.",
+            wraplength=850,
+        ).pack(anchor="w", pady=(0, 10))
         self.check_updates_var = tk.BooleanVar(value=self.settings.check_updates_on_startup)
         self.auto_update_var = tk.BooleanVar(value=self.settings.auto_update)
         self.update_branch_var = tk.StringVar(value=self.settings.update_branch)
         ttk.Checkbutton(tab, text="Check for updates when Auto Bid Builder starts", variable=self.check_updates_var, command=self.save_update_settings).pack(anchor="w")
-        ttk.Checkbutton(tab, text="Automatically install clean fast-forward updates", variable=self.auto_update_var, command=self.save_update_settings).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(tab, text="Install safe updates automatically", variable=self.auto_update_var, command=self.save_update_settings).pack(anchor="w", pady=(6, 0))
         row = ttk.Frame(tab); row.pack(fill="x", pady=(12, 0))
-        ttk.Label(row, text="Update branch:").pack(side="left")
+        ttk.Label(row, text="Update channel:").pack(side="left")
         ttk.Entry(row, textvariable=self.update_branch_var, width=18).pack(side="left", padx=8)
         ttk.Button(row, text="Save", command=self.save_update_settings).pack(side="left")
 
@@ -306,13 +421,13 @@ class AutoBidBuilderApp(tk.Tk):
         self.update_status = tk.StringVar(value="Update status has not been checked yet.")
         ttk.Label(tab, textvariable=self.update_status, wraplength=850).pack(anchor="w")
         buttons = ttk.Frame(tab); buttons.pack(anchor="w", pady=12)
-        self.check_update_button = ttk.Button(buttons, text="Check now", command=self.check_updates)
+        self.check_update_button = ttk.Button(buttons, text="Check for updates now", command=self.check_updates)
         self.check_update_button.pack(side="left")
-        self.install_update_button = ttk.Button(buttons, text="Install update", command=self.install_update)
+        self.install_update_button = ttk.Button(buttons, text="Install available update", command=self.install_update)
         self.install_update_button.pack(side="left", padx=8)
         ttk.Label(
             tab,
-            text="Automatic updates are intentionally fast-forward only. If local source files have uncommitted changes, the updater refuses to overwrite them.",
+            text="If the updater finds local development changes, it stops instead of overwriting them. Normal JTI users should never need to deal with Git manually.",
             wraplength=850,
         ).pack(anchor="w", pady=(8, 0))
 
@@ -347,7 +462,7 @@ class AutoBidBuilderApp(tk.Tk):
         )
 
     def install_update(self) -> None:
-        if not messagebox.askyesno("Install update", "Install the latest fast-forward update from GitHub? The app will need to restart afterward."):
+        if not messagebox.askyesno("Install update", "Install the latest safe update? Auto Bid Builder will need to restart afterward."):
             return
         self._run_background(
             lambda: apply_update(self.settings.update_branch),
@@ -358,7 +473,7 @@ class AutoBidBuilderApp(tk.Tk):
     def _update_finished(self, result) -> None:
         self.update_status.set(result.message)
         if "installed" in result.message.lower():
-            messagebox.showinfo("Update installed", result.message)
+            messagebox.showinfo("Update installed", f"{result.message}\n\nClose and reopen Auto Bid Builder to use the new version.")
 
 
 def main() -> None:
