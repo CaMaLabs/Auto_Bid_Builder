@@ -2,9 +2,37 @@
 
 Auto Bid Builder treats lead discovery as a provider layer. Every source is normalized to the same `Opportunity` model before JTI-fit triage, document intake, scope extraction, or estimating.
 
-## Recommended provider order
+## Public / no-login sources enabled now
 
-### 1. Autodesk BuildingConnected / Bid Board Pro
+The local opportunity sync can pull sources that expose useful public opportunity pages without requiring JTI credentials. Current built-in adapters are:
+
+- **California Construction Authority** public Bid/RFP/RFQ page.
+- **California DGS RESD** current construction/real-estate solicitations page.
+- **Custom RSS/Atom feeds** entered in Settings.
+
+The California Construction Authority page is public and lists current Invitations to Bid, RFPs, and quotation requests. Some individual packets are hosted on Public Purchase and require the provider's free vendor registration/login; Auto Bid Builder does not bypass that boundary.
+
+Public sources are isolated from one another. If a site blocks automated requests or changes its markup, the sync records a source-specific error and continues processing other sources.
+
+Run all enabled sources:
+
+```bash
+auto-bid-sync -o opportunities.json
+```
+
+Open the local provider/settings page:
+
+```bash
+auto-bid-settings --port 8765
+```
+
+Then open `http://127.0.0.1:8765/settings`.
+
+The settings page controls preferred states, lookback period, minimum JTI triage score, public source enable/disable state, custom RSS/Atom feeds, and credential slots for commercial/API-backed providers. Secrets are kept outside Git in the operating-system credential store when available; `ABB_*` environment variables are also supported as read-only overrides.
+
+## Credentialed provider roadmap
+
+### Autodesk BuildingConnected / Bid Board Pro
 
 Primary target for JTI's private commercial invitations-to-bid workflow.
 
@@ -21,31 +49,27 @@ Integration target:
 
 Do not scrape BuildingConnected pages when API access is available.
 
-### 2. Dodge Construction Network API
+### Dodge Construction Network API
 
 Strong candidate for proactive lead discovery rather than only incoming ITBs. Dodge advertises REST/OAuth access to projects, firms/contacts, and project documents, with filters such as geography, project type, stage, valuation, trade, spec division, and bid date. Access is commercial and must be provisioned through Dodge.
 
-This is potentially the best source for finding projects JTI was not already invited to.
+### PlanHub Projects API
 
-### 3. PlanHub Projects API
+PlanHub advertises API access to planning-stage and bidding-stage project data and supports CRM/estimating/ERP integrations. Endpoint access depends on the PlanHub package purchased.
 
-PlanHub advertises API access to planning-stage and bidding-stage project data and supports CRM/estimating/ERP integrations. Endpoint access depends on the PlanHub package purchased. Add this adapter after JTI confirms account/API access and provides the provider documentation/credentials.
+### ConstructConnect / SmartBid
 
-### 4. ConstructConnect / SmartBid
+ConstructConnect operates an external API portal, and SmartBid exposes authenticated API functionality. These are useful if JTI already has a subscription. Provider-specific adapters should be implemented only from the documentation available to JTI's account.
 
-ConstructConnect operates an external API portal, and SmartBid exposes an authenticated Web API help endpoint. These are useful if JTI already has a subscription. Provider-specific schemas should be implemented only from the documentation available to JTI's account.
+### SAM.gov Contract Opportunities API
 
-### 5. SAM.gov public Contract Opportunities API
+SAM.gov is implemented as a live authenticated provider. It requires a SAM.gov public API key and a posted-date range. Auto Bid Builder can search repeated title/state/NAICS filters, normalize records, deduplicate results, and create a JTI estimator review queue.
 
-This is the first live provider implemented in the repository because its public API is documented and testable without a commercial construction-data subscription. It is most useful for federal/public-sector opportunities and as a proving ground for the provider architecture.
+Once a SAM.gov key is entered in Settings and that source is enabled, `auto-bid-sync` includes it automatically.
 
-The API requires a SAM.gov public API key and a posted-date range. Auto Bid Builder can search repeated title/state/NAICS filters, normalize records, optionally fetch opportunity descriptions, deduplicate results, and create a JTI estimator review queue.
-
-Example:
+The older direct command remains available:
 
 ```bash
-export SAM_GOV_API_KEY="..."
-
 auto-bid-builder find-opportunities \
   --provider sam \
   --state CA \
@@ -57,12 +81,10 @@ auto-bid-builder find-opportunities \
   -o ./data/output/opportunities.json
 ```
 
-The companion Markdown review file is written beside the JSON output.
-
 ## Normalized pipeline
 
 ```text
-Provider API / webhook
+Public bid page / RSS / provider API / webhook
         |
         v
 Normalized Opportunity
@@ -99,7 +121,7 @@ The score is **not** a bid/no-bid decision. It is only a queueing mechanism so a
 
 ## Security / data policy
 
-- Keep provider secrets in environment variables or an approved secret store, never in Git.
+- Keep provider secrets in the OS credential store or environment variables, never in Git.
 - Use provider APIs and authorized document links; do not bypass authentication or subscription controls.
 - Do not commit customer opportunity payloads, plan sets, bid documents, contacts, or pricing to the public repository.
 - Store provider IDs so opportunities can be updated rather than duplicated.
