@@ -6,7 +6,7 @@ The goal is to turn a contractor/architect bid package into a traceable millwork
 
 ## Intended workflow
 
-1. **Ingest** bid-set PDFs, specifications, addenda, fixture schedules, finish schedules, responsibility schedules, CAD packages, historical quotes, submittals, RFIs, ASKs, field measurements, shop drawings, historical cost-detail estimates, and purchasing/job-cost evidence.
+1. **Ingest** bid-set PDFs, specifications, addenda, fixture schedules, finish schedules, responsibility schedules, CAD packages, historical quotes, submittals, RFIs, ASKs, field measurements, shop drawings, historical cost-detail estimates, purchasing/job-cost evidence, and legacy estimating/project databases.
 2. **Classify** project metadata, relevant sheets, divisions, vendor-furnished vs GC/subcontractor responsibilities, and millwork scope.
 3. **Extract** bid items with drawing/spec references, dimensions, materials, finishes, hardware, installation responsibility, custom/modification flags, and sustainability requirements.
 4. **Cross-check** plans, schedules, elevations, details, specs, addenda, responsibility tables, RFIs, ASKs, field measurements, shop drawings, and later bulletins for conflicts or omissions.
@@ -39,6 +39,14 @@ auto-bid-builder parse-cost-detail "118331 cost detail.pdf" -o cost_detail.json
 ```
 
 A historical cost detail is treated as **estimate/pricing evidence**, not automatically as realized job cost. In particular, projected hours, displayed labor dollars, material allowances and markups must remain distinct from later actual payroll, purchasing, subcontractor and rework data.
+
+If a legacy Microsoft Access `.mdb` is part of the historical system, export it locally on a Windows machine that has Microsoft Access or the Access Database Engine installed. The helper exports non-system tables to CSV and writes table/query metadata to `schema.json`; the source database itself stays private.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\export_access_mdb.ps1 \
+  -DatabasePath "C:\path\JTI_Template.mdb" \
+  -OutputDir ".\data\private\jti_access_export"
+```
 
 Rank millwork-relevant pages in a drawing package or folder:
 
@@ -130,6 +138,7 @@ Historical purchasing packets from awarded work are treated as **cost evidence**
 - Conservative text signal extraction for millworker responsibility, custom work, field verification, materials, and dimensions.
 - JTI-style quote PDF parsing into numbered scope lines with quantity, sell-each, tax-each, amount, sheet references, and elevation references.
 - Historical JTI cost-detail parsing with labor-category hours/rates, materials, markup, manual adds, tax, unit sell, extended sell, aggregate validation, and inferred document-level calibration.
+- Local Windows helper for exporting legacy Access `.mdb` table/query structure without committing private source data.
 - Quote and cost-detail arithmetic validation at line and document total level.
 - Millwork page relevance scan.
 - Project-lifecycle document classification for field measures, shop drawings/revisions, RFIs, ASKs, bulletins, quotes, and submittals.
