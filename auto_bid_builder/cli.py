@@ -13,6 +13,10 @@ from auto_bid_builder.project_docs import audit_project_folder, project_audit_ma
 from auto_bid_builder.quote.jti import parse_jti_quote_pdf
 from auto_bid_builder.report import revision_report_markdown
 from auto_bid_builder.revisions.map_quote import build_sheet_impacts, map_impacts_to_quote, sheet_impacts_to_dict
+from auto_bid_builder.validation.contract_history import (
+    parse_change_order_pdf,
+    reconcile_cost_detail_to_change_order,
+)
 
 
 def _json(path: Path, data) -> None:
@@ -42,6 +46,21 @@ def cmd_parse_cost_detail(args: argparse.Namespace) -> int:
     if not doc.lines or data["totals_match_display"] is False:
         return 2
     return 0
+
+
+def cmd_reconcile_change_order(args: argparse.Namespace) -> int:
+    cost_detail = parse_cost_detail_pdf(args.cost_detail)
+    change_order = parse_change_order_pdf(args.change_order)
+    result = {
+        "cost_detail": cost_detail.to_dict(),
+        "change_order": change_order.to_dict(),
+        "reconciliation": reconcile_cost_detail_to_change_order(cost_detail, change_order),
+    }
+    if args.output:
+        _json(Path(args.output), result)
+    else:
+        print(json.dumps(result, indent=2))
+    return 0 if result["reconciliation"]["all_available_checks_match"] is True else 2
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -134,6 +153,15 @@ def build_parser() -> argparse.ArgumentParser:
     cd.add_argument("cost_detail")
     cd.add_argument("-o", "--output")
     cd.set_defaults(func=cmd_parse_cost_detail)
+
+    co = sub.add_parser(
+        "reconcile-change-order",
+        help="Reconcile a historical cost-detail change-order line against an executed subcontract change order",
+    )
+    co.add_argument("--cost-detail", required=True)
+    co.add_argument("--change-order", required=True)
+    co.add_argument("-o", "--output")
+    co.set_defaults(func=cmd_reconcile_change_order)
 
     s = sub.add_parser("scan", help="Rank millwork-relevant pages in a bid package")
     s.add_argument("input")
