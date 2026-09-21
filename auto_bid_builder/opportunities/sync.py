@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
 from datetime import date, timedelta
+import json
+from pathlib import Path
 
-from auto_bid_builder.settings import AppSettings, SecretStore
+from auto_bid_builder.settings import AppSettings, SecretStore, cache_path, load_settings
 from .models import Opportunity
 from .providers.public import fetch_cca_opportunities, fetch_dgs_resd_opportunities, fetch_rss_atom
 from .providers.sam import search_sam_opportunities
@@ -32,10 +35,12 @@ def sync_opportunities(settings: AppSettings, secret_store: SecretStore | None =
             continue
         try:
             if provider.kind == "cca_public":
-                opportunities.extend(fetch_cca_opportunities(provider.base_url or None))
+                rows = fetch_cca_opportunities(provider.base_url) if provider.base_url else fetch_cca_opportunities()
+                opportunities.extend(rows)
                 used_sources.append(provider.label)
             elif provider.kind == "ca_dgs_resd":
-                opportunities.extend(fetch_dgs_resd_opportunities(provider.base_url or None))
+                rows = fetch_dgs_resd_opportunities(provider.base_url) if provider.base_url else fetch_dgs_resd_opportunities()
+                opportunities.extend(rows)
                 used_sources.append(provider.label)
             elif provider.kind == "rss":
                 if provider.feed_url:
@@ -75,3 +80,22 @@ def sync_opportunities(settings: AppSettings, secret_store: SecretStore | None =
         "total_shown": len(shown),
         "opportunities": [row.to_dict() for row in shown],
     }
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Pull configured bid opportunities and rank them for JTI review")
+    parser.add_argument("-o", "--output", help="JSON output path; defaults to the local opportunity cache")
+    args = parser.parse_args(argv)
+    result = sync_opportunities(load_settings())
+    path = Path(args.output) if args.output else cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    print(path)
+    if result["errors"]:
+        for row in result["errors"]:
+            print(f"WARNING {row['source']}: {row['error']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
