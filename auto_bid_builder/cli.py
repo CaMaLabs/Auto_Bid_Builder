@@ -7,6 +7,7 @@ from pathlib import Path
 
 from auto_bid_builder.analysis.scope import scan_pdf
 from auto_bid_builder.ingest.pdf import extract_pdf_pages, index_pages_by_sheet
+from auto_bid_builder.procurement import load_procurement_csv, procurement_markdown, summarize_procurement
 from auto_bid_builder.project_docs import audit_project_folder, project_audit_markdown
 from auto_bid_builder.quote.jti import parse_jti_quote_pdf
 from auto_bid_builder.report import revision_report_markdown
@@ -51,6 +52,21 @@ def cmd_project_audit(args: argparse.Namespace) -> int:
     markdown.write_text(project_audit_markdown(docs), encoding="utf-8")
     print(markdown)
     return 0 if docs else 2
+
+
+def cmd_procurement_summary(args: argparse.Namespace) -> int:
+    rows = load_procurement_csv(args.ledger)
+    quote_total = None
+    if args.quote:
+        quote_total = parse_jti_quote_pdf(args.quote).quote_total
+    summary = summarize_procurement(rows, quote_total=quote_total)
+    output = Path(args.output)
+    _json(output, summary.to_dict())
+    markdown = Path(args.markdown) if args.markdown else output.with_suffix(".md")
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    markdown.write_text(procurement_markdown(summary), encoding="utf-8")
+    print(markdown)
+    return 0 if rows else 2
 
 
 def _baseline_index(folder: Path, sheets: set[str]):
@@ -108,6 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("-o", "--output", default="project_audit.json")
     a.add_argument("--markdown")
     a.set_defaults(func=cmd_project_audit)
+
+    c = sub.add_parser(
+        "procurement-summary",
+        help="Summarize normalized historical vendor purchases without mistaking partial purchasing evidence for complete job cost",
+    )
+    c.add_argument("ledger", help="Normalized procurement CSV")
+    c.add_argument("--quote", help="Optional JTI quote PDF used only to calculate documented-purchase / sell-price coverage")
+    c.add_argument("-o", "--output", default="procurement_summary.json")
+    c.add_argument("--markdown")
+    c.set_defaults(func=cmd_procurement_summary)
 
     r = sub.add_parser("revision-audit", help="Map revised drawing signals back to quoted JTI line items")
     r.add_argument("--quote", required=True)
