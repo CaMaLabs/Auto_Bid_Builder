@@ -37,6 +37,7 @@ class AppSettings:
     check_updates_on_startup: bool = True
     auto_update: bool = False
     update_branch: str = "main"
+    onboarding_complete: bool = False
     providers: list[ProviderSettings] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -47,6 +48,7 @@ class AppSettings:
             "check_updates_on_startup": self.check_updates_on_startup,
             "auto_update": self.auto_update,
             "update_branch": self.update_branch,
+            "onboarding_complete": self.onboarding_complete,
             "providers": [x.to_dict() for x in self.providers],
         }
 
@@ -161,6 +163,7 @@ def load_settings(home: Path | None = None) -> AppSettings:
         check_updates_on_startup=bool(raw.get("check_updates_on_startup", True)),
         auto_update=bool(raw.get("auto_update", False)),
         update_branch=str(raw.get("update_branch", "main") or "main"),
+        onboarding_complete=bool(raw.get("onboarding_complete", False)),
         providers=providers,
     )
 
