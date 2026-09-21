@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/CaMaLabs/Auto_Bid_Builder/schemas/bid_project.schema.json",
+  "title": "Auto Bid Builder Project",
+  "type": "object",
+  "required": ["project", "documents", "scope_items", "risks"],
+  "properties": {
+    "project": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "number": {"type": ["string", "null"]},
+        "client": {"type": ["string", "null"]},
+        "gc": {"type": ["string", "null"]},
+        "location": {"type": ["string", "null"]},
+        "bid_due": {"type": ["string", "null"], "format": "date-time"},
+        "project_type": {"type": ["string", "null"]},
+        "store_area_sf": {"type": ["number", "null"]},
+        "boh_area_sf": {"type": ["number", "null"]},
+        "fsc_or_sustainability_required": {"type": ["boolean", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "kind"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "kind": {"enum": ["bid_set", "specification", "addendum", "finish_schedule", "fixture_schedule", "shop_drawing", "proposal", "other"]},
+          "issue_date": {"type": ["string", "null"], "format": "date"},
+          "revision": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "scope_items": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/scopeItem"}
+    },
+    "risks": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/risk"}
+    },
+    "estimate": {
+      "type": "object",
+      "properties": {
+        "currency": {"type": "string", "default": "USD"},
+        "material": {"type": ["number", "null"]},
+        "hardware": {"type": ["number", "null"]},
+        "shop_labor": {"type": ["number", "null"]},
+        "cnc": {"type": ["number", "null"]},
+        "finishing": {"type": ["number", "null"]},
+        "field_labor": {"type": ["number", "null"]},
+        "freight": {"type": ["number", "null"]},
+        "subcontractors": {"type": ["number", "null"]},
+        "pm_engineering": {"type": ["number", "null"]},
+        "contingency": {"type": ["number", "null"]},
+        "overhead": {"type": ["number", "null"]},
+        "margin": {"type": ["number", "null"]},
+        "total": {"type": ["number", "null"]}
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "required": ["document_id"],
+      "properties": {
+        "document_id": {"type": "string"},
+        "page": {"type": ["integer", "null"]},
+        "sheet": {"type": ["string", "null"]},
+        "detail": {"type": ["string", "null"]},
+        "note": {"type": ["string", "null"]},
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      }
+    },
+    "responsibility": {
+      "type": "object",
+      "properties": {
+        "furnished_by": {"type": ["string", "null"]},
+        "installed_by": {"type": ["string", "null"]},
+        "blocking_by": {"type": ["string", "null"]},
+        "rough_in_by": {"type": ["string", "null"]},
+        "shop_drawings_by": {"type": ["string", "null"]}
+      }
+    },
+    "scopeItem": {
+      "type": "object",
+      "required": ["id", "description", "include_status", "evidence"],
+      "properties": {
+        "id": {"type": "string"},
+        "tag": {"type": ["string", "null"]},
+        "description": {"type": "string"},
+        "category": {"type": ["string", "null"]},
+        "include_status": {"enum": ["include", "exclude", "allowance", "alternate", "review"]},
+        "quantity": {"type": ["number", "null"]},
+        "unit": {"type": ["string", "null"]},
+        "dimensions": {"type": ["string", "null"]},
+        "material": {"type": ["string", "null"]},
+        "finish": {"type": ["string", "null"]},
+        "hardware": {"type": ["string", "null"]},
+        "custom_or_modified": {"type": ["boolean", "null"]},
+        "responsibility": {"$ref": "#/$defs/responsibility"},
+        "dependencies": {"type": "array", "items": {"type": "string"}},
+        "sustainability": {"type": "array", "items": {"type": "string"}},
+        "estimator_notes": {"type": ["string", "null"]},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "minItems": 1}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "required": ["id", "severity", "description"],
+      "properties": {
+        "id": {"type": "string"},
+        "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+        "type": {"type": ["string", "null"]},
+        "description": {"type": "string"},
+        "recommended_action": {"type": ["string", "null"]},
+        "related_scope_item_ids": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      }
+    }
+  }
+}
