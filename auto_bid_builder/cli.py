@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from auto_bid_builder.analysis.scope import scan_pdf
+from auto_bid_builder.estimate.cost_detail import parse_cost_detail_pdf
 from auto_bid_builder.ingest.pdf import extract_pdf_pages, index_pages_by_sheet
 from auto_bid_builder.procurement import load_procurement_csv, procurement_markdown, summarize_procurement
 from auto_bid_builder.project_docs import audit_project_folder, project_audit_markdown
@@ -27,6 +28,18 @@ def cmd_parse_quote(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(data, indent=2))
     if not quote.lines or quote.total_matches_display is False or not all(x.amount_matches_display for x in quote.lines):
+        return 2
+    return 0
+
+
+def cmd_parse_cost_detail(args: argparse.Namespace) -> int:
+    doc = parse_cost_detail_pdf(args.cost_detail)
+    data = doc.to_dict()
+    if args.output:
+        _json(Path(args.output), data)
+    else:
+        print(json.dumps(data, indent=2))
+    if not doc.lines or data["totals_match_display"] is False:
         return 2
     return 0
 
@@ -113,6 +126,14 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("quote")
     q.add_argument("-o", "--output")
     q.set_defaults(func=cmd_parse_quote)
+
+    cd = sub.add_parser(
+        "parse-cost-detail",
+        help="Parse a historical JTI cost-detail estimate and infer its displayed labor/material pricing calibration",
+    )
+    cd.add_argument("cost_detail")
+    cd.add_argument("-o", "--output")
+    cd.set_defaults(func=cmd_parse_cost_detail)
 
     s = sub.add_parser("scan", help="Rank millwork-relevant pages in a bid package")
     s.add_argument("input")
