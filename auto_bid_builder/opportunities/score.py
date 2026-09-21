@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from .models import Opportunity
 
 
-# These are triage signals, not automatic bid/no-bid decisions.  Weights are kept
+# These are triage signals, not automatic bid/no-bid decisions. Weights are kept
 # explicit so JTI can tune them from historical wins/losses later.
 DEFAULT_SIGNALS: tuple[tuple[str, float], ...] = (
     ("architectural millwork", 36.0),
@@ -114,3 +114,37 @@ def score_opportunities(
     rows = [score_opportunity(x, preferred_states=preferred_states) for x in opportunities]
     rows.sort(key=lambda x: (-x.score, x.opportunity.bid_due_date or "9999", x.opportunity.title.lower()))
     return rows
+
+
+def opportunity_markdown(rows: list[OpportunityScore], *, minimum_score: float = 0.0) -> str:
+    shown = [row for row in rows if row.score >= minimum_score]
+    lines = [
+        "# JTI Opportunity Review Queue",
+        "",
+        "Scores are triage signals only. An estimator still decides whether JTI should pursue a project.",
+        "",
+        f"Opportunities shown: {len(shown)}",
+        "",
+    ]
+    for row in shown:
+        opp = row.opportunity
+        location = ", ".join(x for x in (opp.city, opp.state) if x) or "Location not supplied"
+        lines.extend(
+            [
+                f"## {row.score:.0f} - {opp.title or '(untitled opportunity)'}",
+                "",
+                f"- Source: {opp.source}",
+                f"- Review tier: `{row.tier}`",
+                f"- Location: {location}",
+                f"- Bid due: {opp.bid_due_date or 'not supplied'}",
+                f"- Organization: {opp.organization or 'not supplied'}",
+                f"- NAICS: {opp.naics_code or 'not supplied'}",
+                f"- Attachments: {len(opp.attachments)}",
+            ]
+        )
+        if row.reasons:
+            lines.append("- Signals: " + "; ".join(row.reasons))
+        if opp.url:
+            lines.append(f"- Link: {opp.url}")
+        lines.append("")
+    return "\n".join(lines)
