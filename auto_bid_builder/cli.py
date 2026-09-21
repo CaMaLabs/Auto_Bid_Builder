@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+from datetime import date, timedelta
 import json
+import os
 from pathlib import Path
 
 from auto_bid_builder.analysis.scope import scan_pdf
 from auto_bid_builder.estimate.cost_detail import parse_cost_detail_pdf
 from auto_bid_builder.ingest.pdf import extract_pdf_pages, index_pages_by_sheet
+from auto_bid_builder.opportunities.providers.sam import search_sam_opportunities
+from auto_bid_builder.opportunities.score import opportunity_markdown, score_opportunities
 from auto_bid_builder.procurement import load_procurement_csv, procurement_markdown, summarize_procurement
 from auto_bid_builder.project_docs import audit_project_folder, project_audit_markdown
 from auto_bid_builder.quote.jti import parse_jti_quote_pdf
@@ -61,6 +65,55 @@ def cmd_reconcile_change_order(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(result, indent=2))
     return 0 if result["reconciliation"]["all_available_checks_match"] is True else 2
+
+
+def cmd_find_opportunities(args: argparse.Namespace) -> int:
+    if args.provider != "sam":
+        raise SystemExit(f"provider '{args.provider}' is not wired yet")
+
+    api_key = args.api_key or os.getenv("SAM_GOV_API_KEY")
+    if not api_key:
+        raise SystemExit("SAM.gov requires --api-key or SAM_GOV_API_KEY")
+
+    today = date.today()
+    posted_to = args.posted_to or today.strftime("%m/%d/%Y")
+    posted_from = args.posted_from or (today - timedelta(days=30)).strftime("%m/%d/%Y")
+    titles = tuple(args.title or ("millwork", "casework", "cabinetry", "architectural woodwork", "finish carpentry"))
+    states = tuple(args.state or ())
+    naics_codes = tuple(args.naics or ())
+
+    opportunities = search_sam_opportunities(
+        api_key=api_key,
+        posted_from=posted_from,
+        posted_to=posted_to,
+        titles=titles,
+        states=states,
+        naics_codes=naics_codes,
+        limit_per_query=args.limit,
+        hydrate_descriptions=args.hydrate_descriptions,
+    )
+    scored = score_opportunities(opportunities, preferred_states=set(args.preferred_state or ()))
+    shown = [row for row in scored if row.score >= args.min_score]
+
+    payload = {
+        "provider": "sam.gov",
+        "posted_from": posted_from,
+        "posted_to": posted_to,
+        "query_titles": list(titles),
+        "query_states": list(states),
+        "query_naics": list(naics_codes),
+        "minimum_score": args.min_score,
+        "total_normalized": len(opportunities),
+        "total_shown": len(shown),
+        "opportunities": [row.to_dict() for row in shown],
+    }
+    output = Path(args.output)
+    _json(output, payload)
+    markdown = Path(args.markdown) if args.markdown else output.with_suffix(".md")
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    markdown.write_text(opportunity_markdown(scored, minimum_score=args.min_score), encoding="utf-8")
+    print(markdown)
+    return 0
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -162,6 +215,25 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("--change-order", required=True)
     co.add_argument("-o", "--output")
     co.set_defaults(func=cmd_reconcile_change_order)
+
+    fo = sub.add_parser(
+        "find-opportunities",
+        help="Pull construction opportunities from a provider API, normalize them, and rank them for estimator review",
+    )
+    fo.add_argument("--provider", choices=["sam"], default="sam")
+    fo.add_argument("--api-key", help="Provider API key; SAM_GOV_API_KEY is used if omitted")
+    fo.add_argument("--posted-from", help="MM/DD/YYYY; defaults to 30 days ago")
+    fo.add_argument("--posted-to", help="MM/DD/YYYY; defaults to today")
+    fo.add_argument("--title", action="append", help="Repeatable provider title search term")
+    fo.add_argument("--state", action="append", help="Repeatable place-of-performance state filter")
+    fo.add_argument("--naics", action="append", help="Repeatable NAICS code search")
+    fo.add_argument("--preferred-state", action="append", help="Repeatable state that receives a small JTI-fit boost")
+    fo.add_argument("--limit", type=int, default=100, help="Maximum records per provider query")
+    fo.add_argument("--hydrate-descriptions", action="store_true", help="Fetch SAM opportunity descriptions before scoring")
+    fo.add_argument("--min-score", type=float, default=20.0, help="Minimum triage score to include in output")
+    fo.add_argument("-o", "--output", default="opportunities.json")
+    fo.add_argument("--markdown")
+    fo.set_defaults(func=cmd_find_opportunities)
 
     s = sub.add_parser("scan", help="Rank millwork-relevant pages in a bid package")
     s.add_argument("input")
