@@ -7,6 +7,7 @@ from pathlib import Path
 
 from auto_bid_builder.analysis.scope import scan_pdf
 from auto_bid_builder.ingest.pdf import extract_pdf_pages, index_pages_by_sheet
+from auto_bid_builder.project_docs import audit_project_folder, project_audit_markdown
 from auto_bid_builder.quote.jti import parse_jti_quote_pdf
 from auto_bid_builder.report import revision_report_markdown
 from auto_bid_builder.revisions.map_quote import build_sheet_impacts, map_impacts_to_quote, sheet_impacts_to_dict
@@ -38,6 +39,18 @@ def cmd_scan(args: argparse.Namespace) -> int:
     rows.sort(key=lambda x: (-x["relevance_score"], x["source"], x["page"]))
     _json(Path(args.output), {"pages": rows})
     return 0
+
+
+def cmd_project_audit(args: argparse.Namespace) -> int:
+    docs = audit_project_folder(args.input)
+    payload = {"documents": [doc.to_dict() for doc in docs]}
+    output = Path(args.output)
+    _json(output, payload)
+    markdown = Path(args.markdown) if args.markdown else output.with_suffix(".md")
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    markdown.write_text(project_audit_markdown(docs), encoding="utf-8")
+    print(markdown)
+    return 0 if docs else 2
 
 
 def _baseline_index(folder: Path, sheets: set[str]):
@@ -89,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("input")
     s.add_argument("-o", "--output", default="bid_scan.json")
     s.set_defaults(func=cmd_scan)
+
+    a = sub.add_parser("project-audit", help="Classify project lifecycle PDFs and surface field-measure/submittal/RFI review states")
+    a.add_argument("input", help="PDF file or folder of project PDFs")
+    a.add_argument("-o", "--output", default="project_audit.json")
+    a.add_argument("--markdown")
+    a.set_defaults(func=cmd_project_audit)
 
     r = sub.add_parser("revision-audit", help="Map revised drawing signals back to quoted JTI line items")
     r.add_argument("--quote", required=True)
