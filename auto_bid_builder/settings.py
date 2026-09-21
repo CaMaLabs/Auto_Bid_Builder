@@ -34,6 +34,9 @@ class AppSettings:
     preferred_states: list[str] = field(default_factory=lambda: ["CA", "NV"])
     lookback_days: int = 30
     minimum_score: float = 20.0
+    check_updates_on_startup: bool = True
+    auto_update: bool = False
+    update_branch: str = "main"
     providers: list[ProviderSettings] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +44,9 @@ class AppSettings:
             "preferred_states": self.preferred_states,
             "lookback_days": self.lookback_days,
             "minimum_score": self.minimum_score,
+            "check_updates_on_startup": self.check_updates_on_startup,
+            "auto_update": self.auto_update,
+            "update_branch": self.update_branch,
             "providers": [x.to_dict() for x in self.providers],
         }
 
@@ -152,6 +158,9 @@ def load_settings(home: Path | None = None) -> AppSettings:
         preferred_states=[str(x).upper() for x in raw.get("preferred_states", ["CA", "NV"]) if str(x).strip()],
         lookback_days=max(1, int(raw.get("lookback_days", 30))),
         minimum_score=float(raw.get("minimum_score", 20.0)),
+        check_updates_on_startup=bool(raw.get("check_updates_on_startup", True)),
+        auto_update=bool(raw.get("auto_update", False)),
+        update_branch=str(raw.get("update_branch", "main") or "main"),
         providers=providers,
     )
 
@@ -172,7 +181,7 @@ class SecretStore:
 
     Environment variables are always supported as read-only overrides. When the
     optional ``keyring`` package has a usable OS backend, values saved from the
-    settings page go to the operating-system credential store.
+    settings UI go to the operating-system credential store.
     """
 
     def _name(self, provider_id: str, field_name: str) -> str:
