@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import webbrowser
 
+from auto_bid_builder.quote.jti_render import write_jti_quote
 from .autoprice import apply_auto_pricing, import_cost_detail_pdf, load_historical_examples
 from .draft import (
     HISTORICAL_STARTER_MATERIAL_MARKUP,
@@ -15,7 +16,6 @@ from .draft import (
     create_estimate_from_workspace,
     load_estimate,
     save_estimate,
-    write_quote_preview,
 )
 
 
@@ -459,7 +459,7 @@ class EstimateWizard(tk.Toplevel):
     def generate_preview(self) -> None:
         if not self.save():
             return
-        html_path, pdf_path = write_quote_preview(self.workspace, self.draft)
+        html_path, pdf_path = write_jti_quote(self.workspace, self.draft)
         warnings = self.draft.warnings()
         if warnings:
             messagebox.showwarning(
