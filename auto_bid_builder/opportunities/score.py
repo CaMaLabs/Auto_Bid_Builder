@@ -35,6 +35,12 @@ DEFAULT_SIGNALS: tuple[tuple[str, float], ...] = (
     ("06 41 00", 30.0),
     ("123200", 24.0),
     ("12 32 00", 24.0),
+    # 2022 NAICS codes used by SAM.gov and other federal sources. These indicate
+    # potentially relevant work even when the solicitation title is generic.
+    ("337212", 32.0),  # Custom Architectural Woodwork and Millwork Manufacturing
+    ("337215", 24.0),  # Showcase, Partition, Shelving, and Locker Manufacturing
+    ("337110", 22.0),  # Wood Kitchen Cabinet and Countertop Manufacturing
+    ("238350", 18.0),  # Finish Carpentry Contractors
 )
 
 DEFAULT_NEGATIVE_SIGNALS: tuple[tuple[str, float], ...] = (
