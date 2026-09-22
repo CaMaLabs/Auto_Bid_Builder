@@ -56,9 +56,19 @@ jobs:
             --onefile `
             --windowed `
             --name AutoBidBuilder `
+            --paths "$PWD" `
+            --collect-submodules auto_bid_builder `
             --collect-all keyring `
             --hidden-import keyring.backends.Windows `
             packaging/desktop_entry.py
+
+      - name: Smoke test frozen executable
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "dist\AutoBidBuilder.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Frozen AutoBidBuilder.exe failed smoke test with exit code $($process.ExitCode)."
+          }
 
       - name: Build portable update package
         shell: pwsh
