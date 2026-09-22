@@ -30,18 +30,33 @@ It can be changed in **Sources & Settings**.
 
 ## User workflow
 
-The GUI deliberately walks users through the job in order:
+The GUI walks users through the job in order:
 
-1. **Find Jobs** - checks all enabled bid sources and ranks likely JTI millwork opportunities.
+1. **Find Jobs** - checks enabled bid sources and ranks likely JTI millwork opportunities.
 2. **Start bid from selected job** - automatically creates a named project workspace under the configured JTI bid folder.
 3. **Add plans/specs** - users select the files they downloaded; Auto Bid Builder copies them into the correct project folder. ZIP bid packages are unpacked automatically and safely inside the workspace.
 4. **Automatic document review** - PDFs are scanned and ranked for millwork/casework/cabinetry and responsibility/exclusion evidence.
-5. **Current Bid** - the estimator sees the pages to review first and can open the generated `bid_review.md` evidence report.
-6. **Estimate / quote** - the workspace already contains dedicated `takeoff`, `estimate`, and `output` folders so the calibrated estimating and quote-generation stages can plug into the same guided project.
+5. **Review scope evidence** - the estimator sees the pages to review first and can open the generated `bid_review.md` report.
+6. **Build estimate** - the new estimator wizard seeds proposed scope lines from the document review, lets the estimator correct/add/remove scope, enter labor hours by JTI category, materials, markup, tax, manual adds, quantities, and internal evidence references.
+7. **Confirm pricing gates** - the app requires explicit confirmation that scope, current labor/pricing rates, and material tax treatment were reviewed. Historical values are shown only as starter information; installation starts at zero because historical installation rates varied by project.
+8. **Generate quote preview** - the app writes HTML and PDF quote previews using the same `Qty / Each / Code / Tax Each / Amount` structure seen in JTI quotations. If review gates or pricing are incomplete, the preview is visibly marked **DRAFT - NOT FOR SUBMISSION**.
+
+The estimate is saved as `estimate/estimate_draft.json`. Quote previews are written to `output/quote_preview.html` and `output/quote_preview.pdf`.
 
 Users can reopen an existing project from the **Current Bid** tab. They do not need to know the internal folder layout.
 
 Provider credentials are kept outside the repository in the operating-system credential store via `keyring`; `ABB_*` environment-variable overrides also remain supported for development/managed deployments.
+
+## Pricing behavior
+
+The guided estimate engine currently uses the historical JTI cost-detail evidence already validated in this project as a starter profile:
+
+- historical shop-side categories `E/M/P/A/F/H/S` begin at `$100/hr`,
+- `I` (installation) begins at `$0/hr` so the estimator must deliberately set the project-specific rate if installation hours are used,
+- material markup starts at the repeatedly observed historical `60%` pattern,
+- material tax starts at `0%` and requires review because historical tax rates varied by job/location.
+
+These starter values do **not** represent a claim about JTI's current rates. The app will not report the quote as ready until the estimator confirms the pricing profile and tax treatment.
 
 ## Updates
 
