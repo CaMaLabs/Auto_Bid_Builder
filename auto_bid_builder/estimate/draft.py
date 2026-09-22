@@ -16,8 +16,8 @@ QUOTE_PREVIEW_PDF = "quote_preview.pdf"
 LABOR_CATEGORIES = ("E", "M", "P", "A", "F", "H", "S", "I")
 
 # Historical JTI cost-detail examples repeatedly used $100/hr for these shop-side
-# categories.  Installation varied materially by job, so I intentionally starts at
-# zero.  These are starter values only; the estimator must confirm pricing before a
+# categories. Installation varied materially by job, so I intentionally starts at
+# zero. These are starter values only; the estimator must confirm pricing before a
 # quote can be marked ready.
 HISTORICAL_STARTER_LABOR_RATES: dict[str, float] = {
     "E": 100.0,
@@ -226,6 +226,13 @@ def create_estimate_from_workspace(root: str | Path, project_title: str | None =
                 pass
         project_title = title
     draft = EstimateDraft(project_title=project_title, lines=_candidate_lines_from_review(root))
+    if draft.lines:
+        # Lazy import avoids a module cycle: autoprice uses EstimateDraft/EstimateLine,
+        # while new drafts should arrive with useful provisional values instead of a
+        # wall of zero-dollar rows.
+        from .autoprice import apply_auto_pricing
+
+        apply_auto_pricing(draft, overwrite=False, collapse_generated=True)
     save_estimate(root, draft)
     return draft
 
