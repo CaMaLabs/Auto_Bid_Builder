@@ -52,7 +52,7 @@ jobs:
             --name AutoBidBuilder `
             --collect-all keyring `
             --hidden-import keyring.backends.Windows `
-            auto_bid_builder/gui.py
+            packaging/desktop_entry.py
 
       - name: Build portable update package
         shell: pwsh
