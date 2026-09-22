@@ -37,6 +37,7 @@ class AppSettings:
     minimum_score: float = 20.0
     check_updates_on_startup: bool = True
     auto_update: bool = False
+    auto_pull_project_files: bool = True
     update_branch: str = "main"
     onboarding_complete: bool = False
     bid_workspace_root: str = field(default_factory=lambda: str(DEFAULT_BID_WORKSPACE_ROOT))
@@ -49,6 +50,7 @@ class AppSettings:
             "minimum_score": self.minimum_score,
             "check_updates_on_startup": self.check_updates_on_startup,
             "auto_update": self.auto_update,
+            "auto_pull_project_files": self.auto_pull_project_files,
             "update_branch": self.update_branch,
             "onboarding_complete": self.onboarding_complete,
             "bid_workspace_root": self.bid_workspace_root,
@@ -166,6 +168,7 @@ def load_settings(home: Path | None = None) -> AppSettings:
         minimum_score=float(raw.get("minimum_score", 20.0)),
         check_updates_on_startup=bool(raw.get("check_updates_on_startup", True)),
         auto_update=bool(raw.get("auto_update", False)),
+        auto_pull_project_files=bool(raw.get("auto_pull_project_files", True)),
         update_branch=str(raw.get("update_branch", "main") or "main"),
         onboarding_complete=bool(raw.get("onboarding_complete", False)),
         bid_workspace_root=workspace_root,
@@ -204,7 +207,6 @@ class SecretStore:
             return env
         try:
             import keyring
-
             return keyring.get_password(SERVICE_NAME, self._name(provider_id, field_name))
         except Exception:
             return None
@@ -212,7 +214,6 @@ class SecretStore:
     def set(self, provider_id: str, field_name: str, value: str) -> None:
         try:
             import keyring
-
             if value:
                 keyring.set_password(SERVICE_NAME, self._name(provider_id, field_name), value)
             else:
