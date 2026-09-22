@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 from typing import Iterable
+import zipfile
 
 from .analysis.scope import scan_pdf
 
@@ -101,13 +102,43 @@ def save_manifest(root: str | Path, manifest: dict) -> Path:
     return path
 
 
+def _extract_bid_zip(archive: Path, destination: Path) -> list[Path]:
+    """Safely extract a downloaded bid package under bid_docs.
+
+    Absolute paths and parent traversal entries are ignored so a malformed ZIP
+    cannot write outside the bid workspace.
+    """
+    extracted_root = destination / f"{archive.stem}_extracted"
+    extracted_root.mkdir(parents=True, exist_ok=True)
+    extracted: list[Path] = []
+    root_resolved = extracted_root.resolve()
+    with zipfile.ZipFile(archive) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            normalized = info.filename.replace("\\", "/")
+            relative = Path(normalized)
+            if relative.is_absolute() or ".." in relative.parts:
+                continue
+            target = extracted_root / relative
+            try:
+                target.resolve().relative_to(root_resolved)
+            except ValueError:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            extracted.append(target)
+    return extracted
+
+
 def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]:
     root = Path(root)
     manifest = load_manifest(root)
     destination = root / "bid_docs"
     destination.mkdir(exist_ok=True)
 
-    copied: list[Path] = []
+    added: list[Path] = []
     known = {str(item.get("stored_name", "")).lower() for item in manifest.get("documents", [])}
     for source_value in sources:
         source = Path(source_value)
@@ -115,32 +146,46 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
             continue
         target = destination / source.name
         if target.resolve() == source.resolve():
-            copied.append(target)
-            continue
-        if target.exists():
-            stem, suffix = target.stem, target.suffix
-            index = 2
-            while target.exists():
-                target = destination / f"{stem} ({index}){suffix}"
-                index += 1
-        shutil.copy2(source, target)
-        copied.append(target)
+            added.append(target)
+        else:
+            if target.exists():
+                stem, suffix = target.stem, target.suffix
+                index = 2
+                while target.exists():
+                    target = destination / f"{stem} ({index}){suffix}"
+                    index += 1
+            shutil.copy2(source, target)
+            added.append(target)
+
+        record = None
         if target.name.lower() not in known:
-            manifest.setdefault("documents", []).append(
-                {
-                    "original_name": source.name,
-                    "stored_name": target.name,
-                    "added_at": _utc_now(),
-                    "kind": target.suffix.lower().lstrip(".") or "file",
-                }
-            )
+            record = {
+                "original_name": source.name,
+                "stored_name": target.name,
+                "added_at": _utc_now(),
+                "kind": target.suffix.lower().lstrip(".") or "file",
+            }
+            manifest.setdefault("documents", []).append(record)
             known.add(target.name.lower())
 
-    if copied:
+        if target.suffix.lower() == ".zip":
+            try:
+                extracted = _extract_bid_zip(target, destination)
+            except zipfile.BadZipFile:
+                extracted = []
+                if record is not None:
+                    record["extraction_error"] = "The ZIP file could not be opened."
+            else:
+                added.extend(extracted)
+                if record is not None:
+                    record["extracted_count"] = len(extracted)
+                    record["extracted_folder"] = f"{target.stem}_extracted"
+
+    if added:
         manifest.setdefault("workflow", {})["documents_added"] = True
         manifest.setdefault("analysis", {})["status"] = "needs_run"
         save_manifest(root, manifest)
-    return copied
+    return added
 
 
 def _review_markdown(root: Path, payload: dict) -> str:
@@ -198,7 +243,7 @@ def analyze_workspace(root: str | Path) -> dict:
         try:
             pages.extend(asdict(row) for row in scan_pdf(pdf))
         except Exception as exc:
-            errors.append({"file": pdf.name, "error": f"{type(exc).__name__}: {exc}"})
+            errors.append({"file": str(pdf.relative_to(root / "bid_docs")), "error": f"{type(exc).__name__}: {exc}"})
 
     pages.sort(key=lambda row: (-int(row.get("relevance_score", 0)), row.get("source", ""), int(row.get("page", 0))))
     payload = {
