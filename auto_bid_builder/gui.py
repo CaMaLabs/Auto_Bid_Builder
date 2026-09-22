@@ -10,9 +10,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import webbrowser
 
-from .bid_workspace import add_documents, analyze_workspace, create_workspace, workspace_status
+from .bid_workspace import add_documents, analyze_workspace, create_workspace, load_manifest, workspace_status
 from .estimate.draft import load_estimate
 from .estimate.wizard import launch_estimator
+from .opportunities.documents import pull_opportunity_documents
 from .opportunities.sync import sync_opportunities
 from .settings import AppSettings, ProviderSettings, SecretStore, load_settings, save_settings
 from .updater import apply_update, check_for_updates
@@ -68,6 +69,7 @@ class AutoBidBuilderApp(tk.Tk):
             "install_update_button",
             "analyze_bid_button",
             "add_docs_button",
+            "pull_docs_button",
             "estimate_button",
         ):
             button = getattr(self, button_name, None)
@@ -137,9 +139,9 @@ class AutoBidBuilderApp(tk.Tk):
         for number, title, body in (
             ("1", "Find jobs", "Check enabled bid sources and rank likely JTI millwork opportunities."),
             ("2", "Start a bid", "The app creates and manages a project folder automatically."),
-            ("3", "Add plans/specs", "Choose the bid documents and let the app review PDFs for likely scope."),
+            ("3", "Get plans/specs", "Auto Bid Builder first tries to pull public project files from the listing; staff can add anything missing."),
             ("4", "Review scope", "Open the highest-priority drawing/spec pages and correct the proposed scope."),
-            ("5", "Build estimate", "Enter labor/materials, confirm current pricing and tax treatment, then generate a JTI-style quote preview."),
+            ("5", "Build estimate", "Use best-effort historical pricing, adjust with simple controls, then generate a familiar JTI-style quote."),
         ):
             row = ttk.Frame(steps)
             row.pack(fill="x", pady=4)
@@ -153,10 +155,12 @@ class AutoBidBuilderApp(tk.Tk):
         prefs.pack(fill="x", pady=(12, 0))
         states_var = tk.StringVar(value=",".join(self.settings.preferred_states or ["CA", "NV"]))
         auto_updates_var = tk.BooleanVar(value=True if first_run else self.settings.auto_update)
+        auto_files_var = tk.BooleanVar(value=self.settings.auto_pull_project_files)
         ttk.Label(prefs, text="Search states").grid(row=0, column=0, sticky="w")
         ttk.Entry(prefs, textvariable=states_var, width=24).grid(row=0, column=1, sticky="w", padx=8)
-        ttk.Checkbutton(prefs, text="Keep Auto Bid Builder updated automatically", variable=auto_updates_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(prefs, text=f"New bids: {self.settings.bid_workspace_root}", wraplength=620).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(prefs, text="Try to download public project files when a bid is started", variable=auto_files_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(prefs, text="Keep Auto Bid Builder updated automatically", variable=auto_updates_var).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(prefs, text=f"New bids: {self.settings.bid_workspace_root}", wraplength=620).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         buttons = ttk.Frame(outer)
         buttons.pack(fill="x", pady=(16, 0))
@@ -165,6 +169,7 @@ class AutoBidBuilderApp(tk.Tk):
             self.settings.preferred_states = [x.strip().upper() for x in states_var.get().split(",") if x.strip()]
             self.settings.check_updates_on_startup = True
             self.settings.auto_update = bool(auto_updates_var.get())
+            self.settings.auto_pull_project_files = bool(auto_files_var.get())
             self.settings.onboarding_complete = True
             for provider in self.settings.providers:
                 if provider.kind in {"cca_public", "ca_dgs_resd"}:
@@ -232,16 +237,11 @@ class AutoBidBuilderApp(tk.Tk):
             self._opportunity_rows[iid] = row
             location = ", ".join(x for x in (opp.get("city"), opp.get("state")) if x)
             self.opp_tree.insert(
-                "",
-                "end",
-                iid=iid,
+                "", "end", iid=iid,
                 values=(
                     f"{row.get('score', 0):g}",
                     str(row.get("tier", "")).replace("_", " ").title(),
-                    opp.get("title", ""),
-                    opp.get("source", ""),
-                    location,
-                    opp.get("bid_due_date") or "",
+                    opp.get("title", ""), opp.get("source", ""), location, opp.get("bid_due_date") or "",
                 ),
             )
         errors = payload.get("errors", [])
@@ -284,8 +284,10 @@ class AutoBidBuilderApp(tk.Tk):
         self.current_workspace = root
         self._refresh_bid_tab()
         self.notebook.select(1)
-        self.status.set("Bid created. Next, add the plans and specifications.")
-        self.after(150, self.add_bid_documents)
+        if self.settings.auto_pull_project_files:
+            self.pull_project_files(row)
+        else:
+            self.status.set("Bid created. Add the plans/specifications or click Pull files from listing.")
 
     # ---------- current bid ----------
     def _build_current_bid_tab(self) -> None:
@@ -312,10 +314,12 @@ class AutoBidBuilderApp(tk.Tk):
         step2 = ttk.LabelFrame(steps, text="Step 2 - Plans and specifications", padding=8)
         step2.pack(fill="x", pady=3)
         row2 = ttk.Frame(step2); row2.pack(fill="x")
-        self.bid_step2_var = tk.StringVar(value="Add the plan set, specs, addenda, fixture schedules, and other bid documents.")
+        self.bid_step2_var = tk.StringVar(value="Pull files from the listing automatically, or add plans/specs from your computer.")
         ttk.Label(row2, textvariable=self.bid_step2_var).pack(side="left", fill="x", expand=True)
         self.add_docs_button = ttk.Button(row2, text="Add plans/specs", command=self.add_bid_documents)
         self.add_docs_button.pack(side="right")
+        self.pull_docs_button = ttk.Button(row2, text="Pull files from listing", command=self.pull_project_files)
+        self.pull_docs_button.pack(side="right", padx=6)
 
         step3 = ttk.LabelFrame(steps, text="Step 3 - Automatic document review", padding=8)
         step3.pack(fill="x", pady=3)
@@ -367,7 +371,7 @@ class AutoBidBuilderApp(tk.Tk):
             self.bid_title_var.set("No bid is open yet")
             self.bid_path_var.set("Find a job and click Start bid, or open an existing Auto Bid Builder project.")
             self.bid_step1_var.set("Waiting for a job to be selected.")
-            self.bid_step2_var.set("Add the plan set, specs, addenda, fixture schedules, and other bid documents.")
+            self.bid_step2_var.set("Pull files from the listing automatically, or add plans/specs from your computer.")
             self.bid_step3_var.set("Waiting for bid documents.")
             self.bid_step5_var.set("Build the estimate after scope evidence is available.")
             return
@@ -381,9 +385,9 @@ class AutoBidBuilderApp(tk.Tk):
         self.bid_path_var.set(status["root"])
         self.bid_step1_var.set("✓ Project workspace created and opportunity information saved.")
         if status["file_count"]:
-            self.bid_step2_var.set(f"✓ {status['file_count']} bid document(s) added, including {status['pdf_count']} PDF(s).")
+            self.bid_step2_var.set(f"✓ {status['file_count']} bid document(s) added, including {status['pdf_count']} PDF(s). Pull again for newly posted files or add local files.")
         else:
-            self.bid_step2_var.set("Next: add the plan set, specs, addenda, schedules, and other bid documents.")
+            self.bid_step2_var.set("No files yet. Click Pull files from listing or Add plans/specs.")
 
         if status["analysis_status"] in {"complete", "partial"}:
             self.bid_step3_var.set(f"✓ Document review complete. {status['relevant_page_count']} millwork-relevant page(s) identified.")
@@ -400,22 +404,17 @@ class AutoBidBuilderApp(tk.Tk):
                 payload = {}
             for index, row in enumerate(payload.get("pages", [])[:100]):
                 self.bid_review_tree.insert(
-                    "",
-                    "end",
-                    iid=f"review-{index}",
+                    "", "end", iid=f"review-{index}",
                     values=(
-                        row.get("relevance_score", ""),
-                        row.get("source", ""),
-                        row.get("page", ""),
-                        row.get("sheet") or "",
-                        ", ".join(row.get("scope_terms") or []),
+                        row.get("relevance_score", ""), row.get("source", ""), row.get("page", ""),
+                        row.get("sheet") or "", ", ".join(row.get("scope_terms") or []),
                     ),
                 )
 
         draft = load_estimate(self.current_workspace)
         if draft is None:
             if review_path.exists():
-                self.bid_step5_var.set("Next: click Build estimate. Auto Bid Builder will seed scope lines from the evidence review for the estimator to correct and price.")
+                self.bid_step5_var.set("Next: click Build estimate. Auto Bid Builder will seed scope and best-effort pricing for the estimator to correct.")
             else:
                 self.bid_step5_var.set("Run document review first, then build the estimate.")
         else:
@@ -424,6 +423,38 @@ class AutoBidBuilderApp(tk.Tk):
                 self.bid_step5_var.set(f"Estimate: ${draft.total:,.2f}. {len(warnings)} review item(s) remain before the quote preview is ready.")
             else:
                 self.bid_step5_var.set(f"✓ Estimate: ${draft.total:,.2f}. Current review gates are complete; quote preview can be generated for final estimator review.")
+
+    def pull_project_files(self, opportunity_row: dict | None = None) -> None:
+        if self.current_workspace is None:
+            messagebox.showinfo("Auto Bid Builder", "Start or open a bid first.")
+            return
+        root = self.current_workspace
+        if opportunity_row is None:
+            try:
+                opportunity_row = load_manifest(root).get("opportunity", {})
+            except Exception as exc:
+                messagebox.showerror("Project files", str(exc))
+                return
+        self._run_background(
+            lambda: pull_opportunity_documents(root, opportunity_row or {}),
+            self._project_files_pulled,
+            message="Checking the project listing for plans, specs, addenda, and bid files...",
+        )
+
+    def _project_files_pulled(self, result) -> None:
+        self._refresh_bid_tab()
+        count = int(getattr(result, "downloaded_count", 0) or 0)
+        errors = list(getattr(result, "errors", []) or [])
+        if count:
+            self.status.set(f"Pulled {count} project file(s) from the listing. Reviewing PDFs now...")
+            status = workspace_status(self.current_workspace) if self.current_workspace else {}
+            if status.get("pdf_count"):
+                self.analyze_current_bid()
+            return
+        if errors:
+            self.status.set("No public files were downloaded. The listing may require a login; add files manually or configure that bid service in Settings.")
+        else:
+            self.status.set("No direct public project files were found on the listing. Add plans/specs manually if needed.")
 
     def add_bid_documents(self) -> None:
         if self.current_workspace is None:
@@ -517,6 +548,7 @@ class AutoBidBuilderApp(tk.Tk):
         self.lookback_var = tk.StringVar(value=str(self.settings.lookback_days))
         self.min_score_var = tk.StringVar(value=f"{self.settings.minimum_score:g}")
         self.workspace_root_var = tk.StringVar(value=self.settings.bid_workspace_root)
+        self.auto_pull_var = tk.BooleanVar(value=self.settings.auto_pull_project_files)
         ttk.Label(general, text="Preferred states").grid(row=0, column=0, sticky="w")
         ttk.Entry(general, textvariable=self.states_var, width=22).grid(row=1, column=0, sticky="ew", padx=(0, 10))
         ttk.Label(general, text="Lookback days").grid(row=0, column=1, sticky="w")
@@ -527,6 +559,11 @@ class AutoBidBuilderApp(tk.Tk):
         ttk.Label(general, text="New bid folder location").grid(row=2, column=0, sticky="w", pady=(10, 0))
         ttk.Entry(general, textvariable=self.workspace_root_var).grid(row=3, column=0, columnspan=3, sticky="ew", padx=(0, 10))
         ttk.Button(general, text="Choose folder", command=self.choose_workspace_root).grid(row=3, column=3, sticky="w")
+        ttk.Checkbutton(
+            general,
+            text="Automatically try to pull public plans/specs/addenda from the opportunity listing when a bid is started",
+            variable=self.auto_pull_var,
+        ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
         general.columnconfigure(0, weight=1)
 
         area = ttk.Frame(tab)
@@ -578,6 +615,7 @@ class AutoBidBuilderApp(tk.Tk):
         root = self.workspace_root_var.get().strip()
         if root:
             self.settings.bid_workspace_root = root
+        self.settings.auto_pull_project_files = bool(self.auto_pull_var.get())
         save_settings(self.settings)
         self.status.set("Settings saved.")
 
