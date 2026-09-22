@@ -18,6 +18,7 @@ DEFAULT_REMOTE = "origin"
 GITHUB_REPOSITORY = "CaMaLabs/Auto_Bid_Builder"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 PORTABLE_ASSET_NAME = "AutoBidBuilder-portable.zip"
+INSTALLER_ASSET_NAME = "JTI_Auto_Bid_Builder_Setup.exe"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class UpdateStatus:
     release_url: str | None = None
     restart_required: bool = False
     relaunch_scheduled: bool = False
+    package_kind: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -77,18 +79,28 @@ def _version_tuple(value: str | None) -> tuple[int, ...]:
 def _release_status_from_payload(payload: dict, current_version: str = __version__) -> UpdateStatus:
     tag = str(payload.get("tag_name") or "").lstrip("vV")
     release_url = str(payload.get("html_url") or "") or None
-    download_url = None
+    installer_url = None
+    portable_url = None
     for asset in payload.get("assets") or []:
         name = str(asset.get("name") or "")
-        if name.lower() == PORTABLE_ASSET_NAME.lower():
-            download_url = str(asset.get("browser_download_url") or "") or None
-            break
-    if download_url is None:
+        url = str(asset.get("browser_download_url") or "") or None
+        if name.lower() == INSTALLER_ASSET_NAME.lower():
+            installer_url = url
+        elif name.lower() == PORTABLE_ASSET_NAME.lower():
+            portable_url = url
+    if portable_url is None:
         for asset in payload.get("assets") or []:
             name = str(asset.get("name") or "").lower()
             if "portable" in name and name.endswith(".zip"):
-                download_url = str(asset.get("browser_download_url") or "") or None
+                portable_url = str(asset.get("browser_download_url") or "") or None
                 break
+
+    # Prefer the normal installer for packaged Windows updates. Inno Setup handles
+    # replacing the installed executable much more reliably than trying to overwrite
+    # a just-closed PyInstaller one-file executable directly. Portable ZIP remains a
+    # fallback for older releases.
+    download_url = installer_url or portable_url
+    package_kind = "installer" if installer_url else ("portable" if portable_url else None)
 
     available = _version_tuple(tag) > _version_tuple(current_version)
     if available and download_url:
@@ -106,6 +118,7 @@ def _release_status_from_payload(payload: dict, current_version: str = __version
         remote_version=tag or None,
         download_url=download_url,
         release_url=release_url,
+        package_kind=package_kind,
     )
 
 
@@ -225,6 +238,78 @@ def _powershell_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _update_log_path() -> Path:
+    local = os.getenv("LOCALAPPDATA")
+    root = Path(local) / "JTI" / "AutoBidBuilder" if local else Path(tempfile.gettempdir()) / "JTI-AutoBidBuilder"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "update.log"
+
+
+def _build_update_script(*, package: Path, package_kind: str, exe_path: Path, install_dir: Path, pid: int, log_path: Path) -> str:
+    common = [
+        "$ErrorActionPreference = 'Stop'",
+        f"$PidToWait = {pid}",
+        f"$Package = {_powershell_quote(str(package))}",
+        f"$InstallDir = {_powershell_quote(str(install_dir))}",
+        f"$Exe = {_powershell_quote(str(exe_path))}",
+        f"$Log = {_powershell_quote(str(log_path))}",
+        "function Write-UpdateLog([string]$Message) { Add-Content -LiteralPath $Log -Value ((Get-Date -Format o) + ' ' + $Message) -Encoding UTF8 }",
+        "Write-UpdateLog 'Updater helper started.'",
+        "try {",
+        "  Write-UpdateLog ('Waiting for process ' + $PidToWait + ' to exit.')",
+        "  while (Get-Process -Id $PidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }",
+        "  Start-Sleep -Milliseconds 800",
+    ]
+    if package_kind == "installer":
+        common.extend(
+            [
+                "  Write-UpdateLog 'Launching silent installer.'",
+                "  $Args = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS')",
+                "  $Installer = Start-Process -FilePath $Package -ArgumentList $Args -Wait -PassThru",
+                "  Write-UpdateLog ('Installer exit code: ' + $Installer.ExitCode)",
+                "  if ($Installer.ExitCode -ne 0) { throw ('Installer failed with exit code ' + $Installer.ExitCode) }",
+            ]
+        )
+    else:
+        common.extend(
+            [
+                "  Write-UpdateLog 'Applying portable update package.'",
+                "  $Stage = Join-Path ([System.IO.Path]::GetDirectoryName($Package)) 'stage'",
+                "  if (Test-Path $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }",
+                "  New-Item -ItemType Directory -Path $Stage | Out-Null",
+                "  Expand-Archive -LiteralPath $Package -DestinationPath $Stage -Force",
+                "  $SourceExe = Join-Path $Stage 'AutoBidBuilder.exe'",
+                "  if (-not (Test-Path $SourceExe)) { throw 'Portable package did not contain AutoBidBuilder.exe.' }",
+                "  $Copied = $false",
+                "  for ($i = 0; $i -lt 20; $i++) {",
+                "    try { Copy-Item -LiteralPath $SourceExe -Destination $Exe -Force; $Copied = $true; break }",
+                "    catch { Start-Sleep -Milliseconds 500 }",
+                "  }",
+                "  if (-not $Copied) { throw 'Could not replace AutoBidBuilder.exe after repeated attempts.' }",
+            ]
+        )
+    common.extend(
+        [
+            "  if (-not (Test-Path $Exe)) { throw 'Installed executable was not found after update.' }",
+            "  Write-UpdateLog 'Relaunching Auto Bid Builder.'",
+            "  Start-Process -FilePath $Exe",
+            "  Write-UpdateLog 'Update completed successfully.'",
+            "}",
+            "catch {",
+            "  Write-UpdateLog ('UPDATE FAILED: ' + $_.Exception.Message)",
+            "  if (Test-Path $Exe) {",
+            "    try { Start-Process -FilePath $Exe; Write-UpdateLog 'Relaunched existing executable after failure.' } catch { Write-UpdateLog ('Relaunch after failure also failed: ' + $_.Exception.Message) }",
+            "  }",
+            "}",
+            "finally {",
+            "  Start-Sleep -Milliseconds 500",
+            "  Remove-Item -LiteralPath $Package -Force -ErrorAction SilentlyContinue",
+            "}",
+        ]
+    )
+    return "\n".join(common)
+
+
 def _apply_release_update() -> UpdateStatus:
     status = _check_release_updates()
     if not status.supported:
@@ -239,37 +324,48 @@ def _apply_release_update() -> UpdateStatus:
     install_dir = Path(sys.executable).resolve().parent
     exe_path = Path(sys.executable).resolve()
     temp_root = Path(tempfile.mkdtemp(prefix="AutoBidBuilderUpdate-"))
-    archive = temp_root / PORTABLE_ASSET_NAME
+    package_kind = status.package_kind or ("installer" if status.download_url.lower().endswith(".exe") else "portable")
+    package_name = INSTALLER_ASSET_NAME if package_kind == "installer" else PORTABLE_ASSET_NAME
+    package = temp_root / package_name
     request = urllib.request.Request(status.download_url, headers={"User-Agent": f"AutoBidBuilder/{__version__}"})
-    with urllib.request.urlopen(request, timeout=120) as response, archive.open("wb") as out:
+    with urllib.request.urlopen(request, timeout=180) as response, package.open("wb") as out:
         shutil.copyfileobj(response, out)
+    if package.stat().st_size < 100_000:
+        raise RuntimeError("The downloaded update package is unexpectedly small and was not installed.")
+
+    log_path = _update_log_path()
+    try:
+        log_path.write_text(
+            f"Auto Bid Builder {__version__} -> {status.remote_version}\nPackage: {package_kind}\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
     script = temp_root / "finish_update.ps1"
     script.write_text(
-        "\n".join(
-            [
-                "$ErrorActionPreference = 'Stop'",
-                f"$PidToWait = {os.getpid()}",
-                f"$Archive = {_powershell_quote(str(archive))}",
-                f"$InstallDir = {_powershell_quote(str(install_dir))}",
-                f"$Exe = {_powershell_quote(str(exe_path))}",
-                "while (Get-Process -Id $PidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }",
-                "Start-Sleep -Milliseconds 500",
-                "Expand-Archive -LiteralPath $Archive -DestinationPath $InstallDir -Force",
-                "Start-Process -FilePath $Exe",
-                "Start-Sleep -Seconds 2",
-                "Remove-Item -LiteralPath $Archive -Force -ErrorAction SilentlyContinue",
-                "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue",
-            ]
+        _build_update_script(
+            package=package,
+            package_kind=package_kind,
+            exe_path=exe_path,
+            install_dir=install_dir,
+            pid=os.getpid(),
+            log_path=log_path,
         ),
-        encoding="utf-8",
+        encoding="utf-8-sig",
     )
 
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    flags = (
+        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        | getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    )
     subprocess.Popen(
         [
             "powershell.exe",
+            "-NoLogo",
             "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-WindowStyle",
@@ -277,20 +373,27 @@ def _apply_release_update() -> UpdateStatus:
             "-File",
             str(script),
         ],
-        cwd=install_dir,
+        cwd=temp_root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         creationflags=flags,
         close_fds=True,
     )
     return UpdateStatus(
         supported=True,
         update_available=False,
-        message=f"Auto Bid Builder {status.remote_version} is ready. The app will close, finish the update, and reopen automatically.",
+        message=(
+            f"Auto Bid Builder {status.remote_version} is downloaded. The app will close, run the updater, and reopen automatically. "
+            f"If Windows blocks the update, details are saved to {log_path}."
+        ),
         mode="release",
         current_version=__version__,
         remote_version=status.remote_version,
         release_url=status.release_url,
         restart_required=True,
         relaunch_scheduled=True,
+        package_kind=package_kind,
     )
 
 
