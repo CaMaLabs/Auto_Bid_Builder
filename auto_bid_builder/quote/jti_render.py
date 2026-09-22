@@ -90,11 +90,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; m
 
 
 def write_jti_quote(root: str | Path, draft: EstimateDraft) -> tuple[Path, Path]:
-    """Write customer-facing output using the historical JTI quotation structure.
-
-    The legacy quote_preview filenames are overwritten with the same JTI-formatted
-    output so older buttons/workspaces never open the previous generic preview layout.
-    """
+    """Write customer-facing JTI output and refresh the private AI-review package."""
     root = Path(root)
     output = root / "output"
     output.mkdir(parents=True, exist_ok=True)
@@ -105,6 +101,16 @@ def write_jti_quote(root: str | Path, draft: EstimateDraft) -> tuple[Path, Path]
     (output / LEGACY_PREVIEW_HTML).write_text(html_text, encoding="utf-8")
     _write_pdf(pdf_path, draft)
     shutil.copy2(pdf_path, output / LEGACY_PREVIEW_PDF)
+
+    # Local-only bundle for a second-pass AI/human audit. Import lazily to avoid a
+    # module cycle and to keep quote rendering usable outside a workspace.
+    try:
+        from auto_bid_builder.bid_workspace import build_ai_review_package
+        if (root / "bid_workspace.json").exists():
+            build_ai_review_package(root)
+    except Exception:
+        # Quote generation must never fail merely because packaging did.
+        pass
     return html_path, pdf_path
 
 
@@ -203,7 +209,6 @@ def _write_pdf(path: Path, draft: EstimateDraft) -> None:
             if draft.general_notes:
                 page.insert_textbox(fitz.Rect(31, y - 5, 455, y + 70), draft.general_notes, fontsize=8.2)
             page.insert_text((531, y + 4), f"{draft.total:,.2f}", fontsize=12, fontname="hebo")
-
         _footer(page)
 
     doc.save(path)
