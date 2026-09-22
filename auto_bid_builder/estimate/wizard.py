@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from statistics import median
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 import webbrowser
 
+from .autoprice import apply_auto_pricing, import_cost_detail_pdf, load_historical_examples
 from .draft import (
     HISTORICAL_STARTER_MATERIAL_MARKUP,
     LABOR_CATEGORIES,
@@ -20,9 +22,9 @@ from .draft import (
 class EstimateWizard(tk.Toplevel):
     """Guided estimator review for one Auto Bid Builder workspace.
 
-    The wizard intentionally keeps historical starter rates visibly provisional.  It
-    will create a quote preview at any time, but the preview remains marked DRAFT until
-    scope, pricing, and tax review gates are complete.
+    The app can make provisional pricing suggestions, but estimator review remains a
+    hard gate. Historical calibration files live locally and are never committed to
+    the public repository.
     """
 
     def __init__(self, parent: tk.Misc, workspace: str | Path, open_path=None) -> None:
@@ -30,13 +32,24 @@ class EstimateWizard(tk.Toplevel):
         self.workspace = Path(workspace)
         self.open_path = open_path
         self.draft = load_estimate(self.workspace) or create_estimate_from_workspace(self.workspace)
+        self._slider_base_rates: dict[str, float] = {}
+        self._slider_base_materials: dict[int, float] = {}
+        self._reset_tuning_baseline()
         self.title("Build Estimate - Auto Bid Builder")
-        self.geometry("1180x760")
-        self.minsize(980, 640)
+        self.geometry("1260x840")
+        self.minsize(1040, 700)
         self.transient(parent)
         self._build_ui()
         self._load_fields()
         self._refresh_lines()
+
+    def _reset_tuning_baseline(self) -> None:
+        self._slider_base_rates = {code: float(self.draft.labor_rates.get(code, 0.0) or 0.0) for code in LABOR_CATEGORIES}
+        self._slider_base_materials = {line.item: float(line.material_cost or 0.0) for line in self.draft.lines}
+
+    def _current_markup_percent(self) -> float:
+        values = [line.material_markup_rate * 100.0 for line in self.draft.lines if line.material_cost > 0]
+        return median(values) if values else HISTORICAL_STARTER_MATERIAL_MARKUP * 100.0
 
     def _build_ui(self) -> None:
         header = ttk.Frame(self, padding=(14, 12, 14, 6))
@@ -66,8 +79,8 @@ class EstimateWizard(tk.Toplevel):
         pricing.pack(fill="x", padx=12, pady=(0, 8))
         ttk.Label(
             pricing,
-            text="Historical starter values are prefilled from JTI cost-detail examples. Confirm the current bid's rates before treating the preview as ready. Installation starts at $0 because historical I rates varied by job.",
-            wraplength=1080,
+            text="Auto Bid Builder can prefill a best-effort estimate from private local JTI cost-detail history. When history is unavailable it uses clearly marked low-confidence allowances. All generated values remain estimator-review items.",
+            wraplength=1160,
         ).grid(row=0, column=0, columnspan=10, sticky="w", pady=(0, 8))
         self.rate_vars: dict[str, tk.StringVar] = {}
         for col, category in enumerate(LABOR_CATEGORIES):
@@ -84,6 +97,45 @@ class EstimateWizard(tk.Toplevel):
         ttk.Checkbutton(checks, text="Current labor/pricing rates confirmed", variable=self.pricing_confirm_var).pack(side="left", padx=14)
         ttk.Checkbutton(checks, text="Material tax treatment confirmed", variable=self.tax_confirm_var).pack(side="left")
 
+        tuning = ttk.LabelFrame(pricing, text="Live bid tuning", padding=8)
+        tuning.grid(row=4, column=0, columnspan=10, sticky="ew", pady=(10, 0))
+        ttk.Label(
+            tuning,
+            text="Use these as quick what-if controls. The estimate total and every affected line update immediately. Moving a slider clears the pricing confirmation so somebody must review the result.",
+            wraplength=1130,
+        ).grid(row=0, column=0, columnspan=8, sticky="w", pady=(0, 6))
+
+        self.labor_adjust_var = tk.DoubleVar(value=100.0)
+        self.material_adjust_var = tk.DoubleVar(value=100.0)
+        self.markup_adjust_var = tk.DoubleVar(value=self._current_markup_percent())
+        self.install_rate_var = tk.DoubleVar(value=float(self.draft.labor_rates.get("I", 0.0) or 0.0))
+        self.labor_adjust_label = tk.StringVar(value="100%")
+        self.material_adjust_label = tk.StringVar(value="100%")
+        self.markup_adjust_label = tk.StringVar(value=f"{self.markup_adjust_var.get():.0f}%")
+        self.install_rate_label = tk.StringVar(value=f"${self.install_rate_var.get():.0f}/hr")
+
+        controls = (
+            ("Shop labor", self.labor_adjust_var, self.labor_adjust_label, 70.0, 160.0),
+            ("Materials", self.material_adjust_var, self.material_adjust_label, 70.0, 160.0),
+            ("Material markup", self.markup_adjust_var, self.markup_adjust_label, 0.0, 100.0),
+            ("Installation rate", self.install_rate_var, self.install_rate_label, 0.0, 250.0),
+        )
+        for col, (label, variable, value_label, lo, hi) in enumerate(controls):
+            frame = ttk.Frame(tuning)
+            frame.grid(row=1, column=col, sticky="ew", padx=(0, 12))
+            top = ttk.Frame(frame); top.pack(fill="x")
+            ttk.Label(top, text=label).pack(side="left")
+            ttk.Label(top, textvariable=value_label, font=("Segoe UI", 9, "bold")).pack(side="right")
+            ttk.Scale(frame, from_=lo, to=hi, variable=variable, command=lambda _v: self._apply_live_tuning()).pack(fill="x")
+            tuning.columnconfigure(col, weight=1)
+
+        actions = ttk.Frame(pricing)
+        actions.grid(row=5, column=0, columnspan=10, sticky="ew", pady=(10, 0))
+        ttk.Button(actions, text="Auto-fill best effort", command=self.auto_fill).pack(side="left")
+        ttk.Button(actions, text="Import JTI cost-detail history", command=self.import_history).pack(side="left", padx=6)
+        self.history_status_var = tk.StringVar(value="")
+        ttk.Label(actions, textvariable=self.history_status_var).pack(side="left", padx=10)
+
         lines_frame = ttk.LabelFrame(self, text="3. Scope and pricing lines", padding=8)
         lines_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         toolbar = ttk.Frame(lines_frame)
@@ -91,7 +143,7 @@ class EstimateWizard(tk.Toplevel):
         ttk.Button(toolbar, text="Add scope item", command=self.add_line).pack(side="left")
         ttk.Button(toolbar, text="Edit selected", command=self.edit_selected).pack(side="left", padx=6)
         ttk.Button(toolbar, text="Remove selected", command=self.remove_selected).pack(side="left")
-        ttk.Label(toolbar, text="Double-click a row to edit it. Imported scope lines are suggestions until an estimator accepts them.").pack(side="right")
+        ttk.Label(toolbar, text="Double-click a row to edit it. Auto-filled lines remain suggestions until an estimator accepts them.").pack(side="right")
 
         columns = ("item", "included", "description", "qty", "labor", "material", "markup", "tax", "amount")
         self.tree = ttk.Treeview(lines_frame, columns=columns, show="headings", selectmode="browse", height=12)
@@ -99,7 +151,7 @@ class EstimateWizard(tk.Toplevel):
             "item": "#", "included": "In?", "description": "Description", "qty": "Qty", "labor": "Labor",
             "material": "Material", "markup": "Markup", "tax": "Tax", "amount": "Amount",
         }
-        widths = {"item": 42, "included": 45, "description": 430, "qty": 60, "labor": 95, "material": 95, "markup": 90, "tax": 80, "amount": 105}
+        widths = {"item": 42, "included": 45, "description": 480, "qty": 60, "labor": 95, "material": 95, "markup": 90, "tax": 80, "amount": 105}
         for col in columns:
             self.tree.heading(col, text=headings[col])
             self.tree.column(col, width=widths[col], anchor="w" if col == "description" else "e")
@@ -112,9 +164,9 @@ class EstimateWizard(tk.Toplevel):
         bottom = ttk.Frame(self, padding=(12, 0, 12, 12))
         bottom.pack(fill="x")
         self.warning_var = tk.StringVar(value="")
-        ttk.Label(bottom, textvariable=self.warning_var, wraplength=720).pack(side="left", fill="x", expand=True)
+        ttk.Label(bottom, textvariable=self.warning_var, wraplength=760).pack(side="left", fill="x", expand=True)
         ttk.Button(bottom, text="Save", command=self.save).pack(side="right")
-        ttk.Button(bottom, text="Generate quote preview", command=self.generate_preview).pack(side="right", padx=8)
+        ttk.Button(bottom, text="Generate JTI quote", command=self.generate_preview).pack(side="right", padx=8)
 
     def _load_fields(self) -> None:
         self.project_var.set(self.draft.project_title)
@@ -127,6 +179,8 @@ class EstimateWizard(tk.Toplevel):
         self.scope_confirm_var.set(self.draft.scope_review_confirmed)
         self.pricing_confirm_var.set(self.draft.pricing_profile_confirmed)
         self.tax_confirm_var.set(self.draft.tax_rate_confirmed)
+        count = len(load_historical_examples())
+        self.history_status_var.set(f"{count} local historical pricing line(s) available" if count else "No private history imported yet; best effort uses provisional allowances")
 
     def _sync_fields(self) -> bool:
         try:
@@ -168,7 +222,105 @@ class EstimateWizard(tk.Toplevel):
         if warnings:
             self.warning_var.set(f"Needs attention: {warnings[0]}" + (f"  (+{len(warnings)-1} more)" if len(warnings) > 1 else ""))
         else:
-            self.warning_var.set("✓ Scope, pricing, and tax gates are complete. Preview is ready for estimator final review.")
+            self.warning_var.set("✓ Scope, pricing, and tax gates are complete. JTI-formatted quote is ready for estimator final review.")
+
+    def _apply_live_tuning(self) -> None:
+        if not hasattr(self, "labor_adjust_var"):
+            return
+        labor_factor = float(self.labor_adjust_var.get()) / 100.0
+        material_factor = float(self.material_adjust_var.get()) / 100.0
+        markup = float(self.markup_adjust_var.get()) / 100.0
+        install_rate = float(self.install_rate_var.get())
+
+        for code in LABOR_CATEGORIES:
+            if code == "I":
+                self.draft.labor_rates[code] = round(install_rate, 2)
+            else:
+                self.draft.labor_rates[code] = round(self._slider_base_rates.get(code, 0.0) * labor_factor, 2)
+            if hasattr(self, "rate_vars") and code in self.rate_vars:
+                self.rate_vars[code].set(f"{self.draft.labor_rates[code]:g}")
+        for line in self.draft.lines:
+            if line.item in self._slider_base_materials:
+                line.material_cost = round(self._slider_base_materials[line.item] * material_factor, 2)
+            if line.material_cost > 0:
+                line.material_markup_rate = markup
+
+        self.labor_adjust_label.set(f"{self.labor_adjust_var.get():.0f}%")
+        self.material_adjust_label.set(f"{self.material_adjust_var.get():.0f}%")
+        self.markup_adjust_label.set(f"{self.markup_adjust_var.get():.0f}%")
+        self.install_rate_label.set(f"${self.install_rate_var.get():.0f}/hr")
+        self.pricing_confirm_var.set(False)
+        self.draft.pricing_profile_confirmed = False
+        self._refresh_lines()
+
+    def auto_fill(self) -> None:
+        if not self._sync_fields():
+            return
+        unpriced = sum(
+            1 for line in self.draft.lines
+            if line.included and line.material_cost == 0 and line.manual_add == 0 and sum(line.normalized_hours().values()) == 0
+        )
+        overwrite = False
+        if unpriced == 0 and self.draft.lines:
+            overwrite = messagebox.askyesno(
+                "Rebuild provisional pricing",
+                "Every included line already has pricing. Rebuild all lines from local history / best effort?\n\nChoose No to leave the current estimate unchanged.",
+                parent=self,
+            )
+            if not overwrite:
+                return
+        summary = apply_auto_pricing(self.draft, overwrite=overwrite, collapse_generated=True)
+        self.scope_confirm_var.set(False)
+        self.pricing_confirm_var.set(False)
+        self.tax_confirm_var.set(False)
+        self._reset_tuning_baseline()
+        self.labor_adjust_var.set(100.0)
+        self.material_adjust_var.set(100.0)
+        self.markup_adjust_var.set(self._current_markup_percent())
+        self.install_rate_var.set(float(self.draft.labor_rates.get("I", 0.0) or 0.0))
+        self._load_fields()
+        self._refresh_lines()
+        save_estimate(self.workspace, self.draft)
+        messagebox.showinfo(
+            "Best-effort pricing filled",
+            f"Filled {summary.filled_lines} line(s).\n\n"
+            f"From private local history: {summary.historical_lines}\n"
+            f"From low-confidence fallback allowances: {summary.heuristic_lines}\n"
+            f"Page-by-page review rows consolidated: {summary.collapsed_lines}\n\n"
+            "These are provisional values. Review the scope, quantities, rates, tax, and finishes before confirming the bid.",
+            parent=self,
+        )
+
+    def import_history(self) -> None:
+        files = filedialog.askopenfilenames(
+            parent=self,
+            title="Choose historical JTI cost-detail PDFs",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+        )
+        if not files:
+            return
+        imported = 0
+        errors: list[str] = []
+        for filename in files:
+            try:
+                import_cost_detail_pdf(filename)
+                imported += 1
+            except Exception as exc:
+                errors.append(f"{Path(filename).name}: {exc}")
+        count = len(load_historical_examples())
+        self.history_status_var.set(f"{count} local historical pricing line(s) available")
+        if errors:
+            messagebox.showwarning(
+                "Historical pricing import",
+                f"Imported {imported} file(s). {len(errors)} could not be parsed.\n\n" + "\n".join(errors[:5]),
+                parent=self,
+            )
+        else:
+            messagebox.showinfo(
+                "Historical pricing imported",
+                f"Imported {imported} private cost-detail file(s). Auto-fill can now match new scope against {count} historical line(s).\n\nThe calibration files stay on this computer and are not committed to GitHub.",
+                parent=self,
+            )
 
     def _selected_index(self) -> int | None:
         selected = self.tree.selection()
@@ -201,6 +353,7 @@ class EstimateWizard(tk.Toplevel):
         del self.draft.lines[index]
         for number, row in enumerate(self.draft.lines, start=1):
             row.item = number
+        self._reset_tuning_baseline()
         self._refresh_lines()
 
     def _edit_line_dialog(self, line: EstimateLine, *, is_new: bool) -> None:
@@ -252,7 +405,7 @@ class EstimateWizard(tk.Toplevel):
 
         ttk.Label(
             outer,
-            text="Material markup starts at the historical 60% pattern learned from prior JTI cost-detail reports. Change it when this bid requires something else.",
+            text="Auto-filled pricing and the historical 60% material-markup pattern are starting points only. Edit anything that does not match the current scope or market.",
             wraplength=700,
         ).pack(anchor="w", pady=(8, 0))
 
@@ -285,6 +438,10 @@ class EstimateWizard(tk.Toplevel):
             line.included = bool(included_var.get())
             if is_new:
                 self.draft.lines.append(line)
+            self._reset_tuning_baseline()
+            self.labor_adjust_var.set(100.0)
+            self.material_adjust_var.set(100.0)
+            self.markup_adjust_var.set(self._current_markup_percent())
             self._refresh_lines()
             win.destroy()
 
@@ -306,14 +463,14 @@ class EstimateWizard(tk.Toplevel):
         warnings = self.draft.warnings()
         if warnings:
             messagebox.showwarning(
-                "Draft quote created",
-                f"A quote preview was created, but it is marked DRAFT because {len(warnings)} item(s) still need attention.\n\nFirst issue: {warnings[0]}",
+                "Draft JTI quote created",
+                f"A JTI-formatted quote was created, but it is marked DRAFT because {len(warnings)} item(s) still need attention.\n\nFirst issue: {warnings[0]}",
                 parent=self,
             )
         else:
             messagebox.showinfo(
-                "Quote preview ready",
-                "The quote preview passed the current scope/pricing review gates. It still requires estimator final review before submission.",
+                "JTI quote ready",
+                "The quote passed the current scope/pricing review gates and was formatted in the familiar JTI quote structure. It still requires estimator final review before submission.",
                 parent=self,
             )
         if self.open_path is not None:
