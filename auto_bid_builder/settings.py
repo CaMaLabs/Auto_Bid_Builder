@@ -9,6 +9,7 @@ from typing import Any
 
 SERVICE_NAME = "AutoBidBuilder"
 DEFAULT_HOME = Path(os.getenv("AUTO_BID_BUILDER_HOME", Path.home() / ".auto_bid_builder"))
+DEFAULT_BID_WORKSPACE_ROOT = Path.home() / "Documents" / "JTI Bids"
 
 
 @dataclass
@@ -38,6 +39,7 @@ class AppSettings:
     auto_update: bool = False
     update_branch: str = "main"
     onboarding_complete: bool = False
+    bid_workspace_root: str = field(default_factory=lambda: str(DEFAULT_BID_WORKSPACE_ROOT))
     providers: list[ProviderSettings] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,6 +51,7 @@ class AppSettings:
             "auto_update": self.auto_update,
             "update_branch": self.update_branch,
             "onboarding_complete": self.onboarding_complete,
+            "bid_workspace_root": self.bid_workspace_root,
             "providers": [x.to_dict() for x in self.providers],
         }
 
@@ -156,6 +159,7 @@ def load_settings(home: Path | None = None) -> AppSettings:
     for provider_id, item in configured.items():
         providers.append(_merge_provider(item, ProviderSettings(provider_id, provider_id, item.get("kind", "rss"))))
 
+    workspace_root = str(raw.get("bid_workspace_root") or DEFAULT_BID_WORKSPACE_ROOT)
     return AppSettings(
         preferred_states=[str(x).upper() for x in raw.get("preferred_states", ["CA", "NV"]) if str(x).strip()],
         lookback_days=max(1, int(raw.get("lookback_days", 30))),
@@ -164,6 +168,7 @@ def load_settings(home: Path | None = None) -> AppSettings:
         auto_update=bool(raw.get("auto_update", False)),
         update_branch=str(raw.get("update_branch", "main") or "main"),
         onboarding_complete=bool(raw.get("onboarding_complete", False)),
+        bid_workspace_root=workspace_root,
         providers=providers,
     )
 
