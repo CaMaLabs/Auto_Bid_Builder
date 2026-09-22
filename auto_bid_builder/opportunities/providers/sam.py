@@ -11,6 +11,15 @@ from ..models import Opportunity
 
 SAM_SEARCH_URL = "https://api.sam.gov/opportunities/v2/search"
 
+# NAICS codes that are strong JTI-adjacent discovery signals. They are used as
+# search seeds, not as an automatic bid/no-bid decision.
+JTI_NAICS_CODES = (
+    "337212",  # Custom Architectural Woodwork and Millwork Manufacturing
+    "337215",  # Showcase, Partition, Shelving, and Locker Manufacturing
+    "337110",  # Wood Kitchen Cabinet and Countertop Manufacturing
+    "238350",  # Finish Carpentry Contractors
+)
+
 
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
@@ -34,7 +43,7 @@ def _with_api_key(url: str, api_key: str) -> str:
 
 
 def _get_json(url: str, *, timeout: float = 30.0) -> dict:
-    req = Request(url, headers={"Accept": "application/json", "User-Agent": "AutoBidBuilder/0.1"})
+    req = Request(url, headers={"Accept": "application/json", "User-Agent": "AutoBidBuilder/0.4"})
     with urlopen(req, timeout=timeout) as response:  # nosec B310 - URL is controlled by provider module
         return json.loads(response.read().decode("utf-8"))
 
@@ -42,7 +51,7 @@ def _get_json(url: str, *, timeout: float = 30.0) -> dict:
 def _get_description(url: str, api_key: str, *, timeout: float = 30.0) -> str:
     req = Request(
         _with_api_key(url, api_key),
-        headers={"Accept": "text/html,application/json,text/plain", "User-Agent": "AutoBidBuilder/0.1"},
+        headers={"Accept": "text/html,application/json,text/plain", "User-Agent": "AutoBidBuilder/0.4"},
     )
     with urlopen(req, timeout=timeout) as response:  # nosec B310 - URL originates from SAM.gov response
         body = response.read().decode("utf-8", errors="replace")
@@ -77,9 +86,10 @@ def _normalize(record: dict, *, api_key: str, hydrate_description: bool) -> Oppo
     if not isinstance(links, list):
         links = []
 
-    user_url = record.get("additionalInfoLink")
-    if not user_url:
-        # SAM's uiLink can require a privileged role, so only preserve it as metadata.
+    # additionalInfoLink is preferred, but SAM also returns uiLink for many public
+    # opportunities. Keeping it gives the desktop app something useful to open.
+    user_url = record.get("additionalInfoLink") or record.get("uiLink")
+    if user_url and not str(user_url).lower().startswith(("http://", "https://")):
         user_url = None
 
     return Opportunity(
@@ -95,7 +105,7 @@ def _normalize(record: dict, *, api_key: str, hydrate_description: bool) -> Oppo
         postal_code=postal,
         naics_code=record.get("naicsCode"),
         classification_code=record.get("classificationCode"),
-        url=user_url,
+        url=str(user_url) if user_url else None,
         attachments=tuple(str(x) for x in links),
         metadata={
             "solicitation_number": record.get("solicitationNumber"),
@@ -135,6 +145,47 @@ def _search_once(
     return _get_json(f"{SAM_SEARCH_URL}?{urlencode(params)}")
 
 
+def _search_query_pages(
+    *,
+    api_key: str,
+    posted_from: str,
+    posted_to: str,
+    title: str | None,
+    state: str | None,
+    naics_code: str | None,
+    page_size: int,
+    max_records: int,
+) -> list[dict]:
+    """Read a bounded number of SAM pages for one search specification.
+
+    SAM documents ``offset`` as a page index, not a record offset. Incrementing it
+    by one is therefore important when a query has more results than one page.
+    """
+    rows: list[dict] = []
+    offset = 0
+    page_size = min(max(page_size, 1), 1000)
+    max_records = max(page_size, max_records)
+
+    while len(rows) < max_records:
+        payload = _search_once(
+            api_key=api_key,
+            posted_from=posted_from,
+            posted_to=posted_to,
+            title=title,
+            state=state,
+            naics_code=naics_code,
+            limit=min(page_size, max_records - len(rows)),
+            offset=offset,
+        )
+        page = list(payload.get("opportunitiesData") or [])
+        rows.extend(page)
+        total = int(payload.get("totalRecords") or len(rows))
+        if not page or len(rows) >= total or len(page) < page_size:
+            break
+        offset += 1
+    return rows[:max_records]
+
+
 def search_sam_opportunities(
     *,
     api_key: str,
@@ -144,13 +195,16 @@ def search_sam_opportunities(
     states: tuple[str, ...] = (),
     naics_codes: tuple[str, ...] = (),
     limit_per_query: int = 100,
+    max_records_per_query: int = 500,
     hydrate_descriptions: bool = False,
 ) -> list[Opportunity]:
     """Search SAM.gov and normalize results.
 
-    SAM's public Opportunities API requires a posted-date range.  Multiple title/state
-    filters are queried independently and then de-duplicated by notice id so a lead can
-    match more than one JTI signal without appearing multiple times.
+    SAM's public Opportunities API requires a posted-date range. Multiple title,
+    state, and NAICS searches are queried independently and then de-duplicated by
+    notice id. This is intentionally discovery-oriented: a generic federal project
+    title can still be surfaced because its NAICS or hydrated description indicates
+    JTI-adjacent work.
     """
 
     if not api_key:
@@ -168,16 +222,16 @@ def search_sam_opportunities(
 
     records: dict[str, dict] = {}
     for title, state, naics_code in query_specs:
-        payload = _search_once(
+        for record in _search_query_pages(
             api_key=api_key,
             posted_from=posted_from,
             posted_to=posted_to,
             title=title,
             state=state,
             naics_code=naics_code,
-            limit=limit_per_query,
-        )
-        for record in payload.get("opportunitiesData") or []:
+            page_size=limit_per_query,
+            max_records=max_records_per_query,
+        ):
             key = str(record.get("noticeId") or record.get("solicitationNumber") or json.dumps(record, sort_keys=True))
             records[key] = record
 
