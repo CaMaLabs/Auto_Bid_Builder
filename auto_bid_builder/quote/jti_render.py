@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from html import escape
 from pathlib import Path
+import shutil
 
 import fitz
 
@@ -10,6 +11,8 @@ from auto_bid_builder.estimate.draft import EstimateDraft
 
 JTI_QUOTE_HTML = "jti_quote.html"
 JTI_QUOTE_PDF = "jti_quote.pdf"
+LEGACY_PREVIEW_HTML = "quote_preview.html"
+LEGACY_PREVIEW_PDF = "quote_preview.pdf"
 _FOOTER_1 = "JEFFREY TROTT INDUSTRIES, INC."
 _FOOTER_2 = "1934 NORTH ENTERPRISE STREET"
 _FOOTER_3 = "PH 714 974-1008"
@@ -87,14 +90,21 @@ body {{ font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; m
 
 
 def write_jti_quote(root: str | Path, draft: EstimateDraft) -> tuple[Path, Path]:
-    """Write customer-facing output using the historical JTI quotation structure."""
+    """Write customer-facing output using the historical JTI quotation structure.
+
+    The legacy quote_preview filenames are overwritten with the same JTI-formatted
+    output so older buttons/workspaces never open the previous generic preview layout.
+    """
     root = Path(root)
     output = root / "output"
     output.mkdir(parents=True, exist_ok=True)
     html_path = output / JTI_QUOTE_HTML
     pdf_path = output / JTI_QUOTE_PDF
-    html_path.write_text(_html(draft), encoding="utf-8")
+    html_text = _html(draft)
+    html_path.write_text(html_text, encoding="utf-8")
+    (output / LEGACY_PREVIEW_HTML).write_text(html_text, encoding="utf-8")
     _write_pdf(pdf_path, draft)
+    shutil.copy2(pdf_path, output / LEGACY_PREVIEW_PDF)
     return html_path, pdf_path
 
 
