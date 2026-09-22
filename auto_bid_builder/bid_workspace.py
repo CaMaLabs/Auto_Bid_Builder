@@ -25,15 +25,13 @@ def _utc_now() -> str:
 
 
 def default_workspace_root() -> Path:
-    documents = Path.home() / "Documents"
-    return documents / "JTI Bids"
+    return Path.home() / "Documents" / "JTI Bids"
 
 
 def _safe_name(value: str, fallback: str = "New Bid") -> str:
     value = re.sub(r"[<>:\"/\\|?*\x00-\x1f]", " ", value or "")
     value = re.sub(r"\s+", " ", value).strip(" .")
-    value = value[:90].strip()
-    return value or fallback
+    return value[:90].strip() or fallback
 
 
 def _unique_workspace_path(base_root: Path, desired_name: str) -> Path:
@@ -67,13 +65,7 @@ def create_workspace(base_root: str | Path, opportunity_row: dict) -> Path:
         "updated_at": _utc_now(),
         "opportunity": opportunity_row,
         "documents": [],
-        "analysis": {
-            "status": "not_run",
-            "last_run_at": None,
-            "pdf_count": 0,
-            "docx_count": 0,
-            "relevant_page_count": 0,
-        },
+        "analysis": {"status": "not_run", "last_run_at": None, "pdf_count": 0, "docx_count": 0, "relevant_page_count": 0},
         "workflow": {
             "job_selected": True,
             "documents_added": False,
@@ -151,12 +143,7 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
             added.append(target)
         record = None
         if target.name.lower() not in known:
-            record = {
-                "original_name": source.name,
-                "stored_name": target.name,
-                "added_at": _utc_now(),
-                "kind": target.suffix.lower().lstrip(".") or "file",
-            }
+            record = {"original_name": source.name, "stored_name": target.name, "added_at": _utc_now(), "kind": target.suffix.lower().lstrip(".") or "file"}
             manifest.setdefault("documents", []).append(record)
             known.add(target.name.lower())
         if target.suffix.lower() == ".zip":
@@ -179,7 +166,6 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
 
 
 def _docx_text(path: Path) -> str:
-    """Extract paragraph/table text from DOCX without requiring python-docx."""
     with zipfile.ZipFile(path) as archive:
         xml = archive.read("word/document.xml")
     root = ET.fromstring(xml)
@@ -192,19 +178,26 @@ def _docx_text(path: Path) -> str:
     return " ".join(chunks).replace(" \n ", "\n")
 
 
+def _is_priceable_scope(row: dict) -> bool:
+    if row.get("scope_terms"):
+        return True
+    for signal in row.get("signals") or []:
+        if signal.get("kind") == "responsibility" and str(signal.get("value", "")).startswith("millworker_"):
+            return True
+    return False
+
+
 def _review_markdown(root: Path, payload: dict) -> str:
     manifest = load_manifest(root)
     opportunity = manifest.get("opportunity", {}).get("opportunity", manifest.get("opportunity", {}))
     title = opportunity.get("title") or root.name
     lines = [
-        f"# Bid document review - {title}",
-        "",
-        "This is an estimator review aid, not a final scope decision. Every item below comes from the current files in `bid_docs`.",
-        "",
+        f"# Bid document review - {title}", "",
+        "This is an estimator review aid, not a final scope decision. Every item below comes from the current files in `bid_docs`.", "",
         f"PDF files reviewed: {payload.get('pdf_count', 0)}",
         f"DOCX files reviewed: {payload.get('docx_count', 0)}",
-        f"Scope/review evidence rows found: {payload.get('relevant_page_count', 0)}",
-        "",
+        f"Potential new JTI scope rows: {len(payload.get('pages', []))}",
+        f"Review-only demolition/adjacent rows: {len(payload.get('review_only', []))}", "",
     ]
     errors = payload.get("errors", [])
     if errors:
@@ -212,33 +205,29 @@ def _review_markdown(root: Path, payload: dict) -> str:
         for error in errors:
             lines.append(f"- {error['file']}: {error['error']}")
         lines.append("")
-    lines.extend(["## Highest-priority evidence", ""])
+
+    lines.extend(["## Potential new JTI scope", ""])
     for row in payload.get("pages", [])[:40]:
         sheet = f" / sheet {row.get('sheet')}" if row.get("sheet") else ""
-        positive = list(row.get("scope_terms") or [])
-        demolition = list(row.get("demolition_terms") or [])
-        adjacent = list(row.get("adjacent_review_terms") or [])
-        if positive:
-            label = "potential new scope: " + ", ".join(positive)
-        elif demolition:
-            label = "demolition/existing only: " + ", ".join(demolition)
-        elif adjacent:
-            label = "adjacent JTI review: " + ", ".join(adjacent)
-        else:
-            label = "responsibility language requiring review"
-        lines.append(f"- **{row.get('source')} - page {row.get('page')}{sheet}** - score {row.get('relevance_score')} - {label}")
+        terms = ", ".join(row.get("scope_terms") or []) or "explicit millworker responsibility"
+        lines.append(f"- **{row.get('source')} - page {row.get('page')}{sheet}** - score {row.get('relevance_score')} - {terms}")
         by_others = row.get("by_others_mentions") or []
         if by_others:
             lines.append(f"  - Responsibility/exclusion language: {', '.join(by_others)}")
     if not payload.get("pages"):
-        lines.append("- No high-confidence JTI scope language was detected. Do not create a fabrication price from incidental terminology alone.")
-    lines.extend([
-        "",
-        "## Next estimator action",
-        "",
-        "Review positive scope separately from demolition/existing references and adjacent-trade items. Check responsibility schedules, finish schedules, elevations/details, specifications, and addenda before accepting scope or pricing assumptions.",
-        "",
-    ])
+        lines.append("- No high-confidence new fabrication scope was detected. Do not create a fabrication price from incidental terminology alone.")
+
+    lines.extend(["", "## Review-only evidence — do not auto-price", ""])
+    for row in payload.get("review_only", [])[:60]:
+        sheet = f" / sheet {row.get('sheet')}" if row.get("sheet") else ""
+        demolition = list(row.get("demolition_terms") or [])
+        adjacent = list(row.get("adjacent_review_terms") or [])
+        label = "demolition/existing: " + ", ".join(demolition) if demolition else "adjacent scope: " + ", ".join(adjacent)
+        lines.append(f"- **{row.get('source')} - page {row.get('page')}{sheet}** - {label}")
+    if not payload.get("review_only"):
+        lines.append("- None detected.")
+
+    lines.extend(["", "## Next estimator action", "", "Review positive scope separately from demolition/existing references and adjacent-trade items. Check responsibility schedules, finish schedules, elevations/details, specifications, and addenda before accepting scope or pricing assumptions.", ""])
     return "\n".join(lines)
 
 
@@ -247,28 +236,27 @@ def analyze_workspace(root: str | Path) -> dict:
     manifest = load_manifest(root)
     pdfs = sorted((root / "bid_docs").glob("**/*.pdf"))
     docx_files = sorted((root / "bid_docs").glob("**/*.docx"))
-    pages: list[dict] = []
+    all_rows: list[dict] = []
     errors: list[dict[str, str]] = []
     for pdf in pdfs:
         try:
-            pages.extend(asdict(row) for row in scan_pdf(pdf))
+            all_rows.extend(asdict(row) for row in scan_pdf(pdf))
         except Exception as exc:
             errors.append({"file": str(pdf.relative_to(root / "bid_docs")), "error": f"{type(exc).__name__}: {exc}"})
     for docx in docx_files:
         try:
             row = scan_text(_docx_text(docx), source=docx.name)
             if row is not None:
-                pages.append(asdict(row))
+                all_rows.append(asdict(row))
         except Exception as exc:
             errors.append({"file": str(docx.relative_to(root / "bid_docs")), "error": f"{type(exc).__name__}: {exc}"})
-    pages.sort(key=lambda row: (-int(row.get("relevance_score", 0)), row.get("source", ""), int(row.get("page", 0))))
+    all_rows.sort(key=lambda row: (-int(row.get("relevance_score", 0)), row.get("source", ""), int(row.get("page", 0))))
+    pages = [row for row in all_rows if _is_priceable_scope(row)]
+    review_only = [row for row in all_rows if not _is_priceable_scope(row)]
     payload = {
-        "generated_at": _utc_now(),
-        "pdf_count": len(pdfs),
-        "docx_count": len(docx_files),
-        "relevant_page_count": len(pages),
-        "errors": errors,
-        "pages": pages,
+        "generated_at": _utc_now(), "pdf_count": len(pdfs), "docx_count": len(docx_files),
+        "relevant_page_count": len(pages), "review_only_count": len(review_only), "errors": errors,
+        "pages": pages, "review_only": review_only,
     }
     (root / "output" / ANALYSIS_NAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (root / "output" / ANALYSIS_MARKDOWN_NAME).write_text(_review_markdown(root, payload), encoding="utf-8")
@@ -276,11 +264,8 @@ def analyze_workspace(root: str | Path) -> dict:
     reviewed_count = len(pdfs) + len(docx_files)
     analysis.update({
         "status": "complete" if reviewed_count and not errors else ("partial" if reviewed_count else "no_supported_docs"),
-        "last_run_at": payload["generated_at"],
-        "pdf_count": len(pdfs),
-        "docx_count": len(docx_files),
-        "relevant_page_count": len(pages),
-        "error_count": len(errors),
+        "last_run_at": payload["generated_at"], "pdf_count": len(pdfs), "docx_count": len(docx_files),
+        "relevant_page_count": len(pages), "review_only_count": len(review_only), "error_count": len(errors),
     })
     workflow = manifest.setdefault("workflow", {})
     workflow["documents_added"] = bool(manifest.get("documents")) or bool(reviewed_count)
@@ -290,11 +275,7 @@ def analyze_workspace(root: str | Path) -> dict:
 
 
 def build_ai_review_package(root: str | Path) -> Path:
-    """Create a local ZIP containing the current bid plus its supporting evidence.
-
-    The package is intentionally created inside the private bid workspace. Nothing is
-    uploaded or committed. A human can attach the ZIP to an AI review conversation.
-    """
+    """Create a private local ZIP with the quote, estimate, evidence, and uploaded bid docs."""
     root = Path(root)
     if not (root / MANIFEST_NAME).exists():
         raise FileNotFoundError("Not an Auto Bid Builder workspace.")
@@ -303,32 +284,20 @@ def build_ai_review_package(root: str | Path) -> Path:
     target = output / AI_REVIEW_PACKAGE_NAME
     readme = (
         "JTI AUTO BID BUILDER - AI DOUBLE-CHECK PACKAGE\n\n"
-        "Review the proposed bid against every supporting document. Check for omitted scope, "
-        "false-positive scope, demolition mistaken for new fabrication, by-others/NIC language, "
-        "addenda, quantities, finishes, material assumptions, labor assumptions, tax, exclusions, "
-        "and contradictions between drawings/specifications. Do not assume the generated estimate "
-        "is correct. Cite the source document/page for every recommended change.\n"
+        "Review the proposed bid against every supporting document. Check for omitted scope, false-positive scope, demolition mistaken for new fabrication, by-others/NIC language, addenda, quantities, finishes, material assumptions, labor assumptions, tax, exclusions, and contradictions between drawings/specifications. Do not assume the generated estimate is correct. Cite the source document/page for every recommended change.\n"
     )
     include_roots = [root / "bid_docs", root / "takeoff", root / "estimate"]
-    include_files = [
-        root / MANIFEST_NAME,
-        root / "opportunity.json",
-        output / ANALYSIS_NAME,
-        output / ANALYSIS_MARKDOWN_NAME,
-        output / "quote_preview.pdf",
-        output / "quote_preview.html",
-    ]
+    include_files = [root / MANIFEST_NAME, root / "opportunity.json", output / ANALYSIS_NAME, output / ANALYSIS_MARKDOWN_NAME, output / "jti_quote.pdf", output / "jti_quote.html", output / "quote_preview.pdf", output / "quote_preview.html"]
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         archive.writestr("AI_REVIEW_INSTRUCTIONS.txt", readme)
         for file in include_files:
             if file.is_file():
                 archive.write(file, file.relative_to(root).as_posix())
         for folder in include_roots:
-            if not folder.exists():
-                continue
-            for file in sorted(folder.rglob("*")):
-                if file.is_file():
-                    archive.write(file, file.relative_to(root).as_posix())
+            if folder.exists():
+                for file in sorted(folder.rglob("*")):
+                    if file.is_file():
+                        archive.write(file, file.relative_to(root).as_posix())
     return target
 
 
@@ -344,11 +313,10 @@ def workspace_status(root: str | Path) -> dict:
     return {
         "root": str(root),
         "title": manifest.get("opportunity", {}).get("opportunity", manifest.get("opportunity", {})).get("title") or root.name,
-        "file_count": len(files),
-        "pdf_count": len(pdfs),
-        "docx_count": len(docx_files),
+        "file_count": len(files), "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "analysis_status": analysis.get("status", "not_run"),
         "relevant_page_count": int(analysis.get("relevant_page_count", 0) or 0),
+        "review_only_count": int(analysis.get("review_only_count", 0) or 0),
         "workflow": workflow,
         "review_json": str(root / "output" / ANALYSIS_NAME),
         "review_markdown": str(root / "output" / ANALYSIS_MARKDOWN_NAME),
