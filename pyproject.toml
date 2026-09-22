@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "auto-bid-builder"
-version = "0.3.1"
+version = "0.4.0"
 description = "Evidence-backed bid assistance for commercial millwork and custom fabrication"
 requires-python = ">=3.11"
 dependencies = ["pdfplumber>=0.11", "PyMuPDF>=1.24", "keyring>=25"]
