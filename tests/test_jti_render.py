@@ -1,6 +1,8 @@
 from pathlib import Path
 import json
 
+import fitz
+
 from auto_bid_builder.estimate.draft import EstimateDraft, EstimateLine
 from auto_bid_builder.quote.jti_render import write_jti_quote
 
@@ -36,7 +38,8 @@ def test_jti_quote_uses_familiar_customer_columns(tmp_path: Path):
         assert heading in html
     assert "JEFFREY TROTT INDUSTRIES" in html
     assert "Internal confidence note" not in html
-    assert "plans.pdf / A8.00" not in html
+    assert "plans.pdf / A8.00" in html
+    assert "reference page appended to PDF" in html
     assert pdf_path.exists()
     assert pdf_path.stat().st_size > 500
 
@@ -97,3 +100,73 @@ def test_jti_quote_includes_job_site_source_and_poc_when_available(tmp_path: Pat
         assert value in html
     assert pdf_path.exists()
     assert pdf_path.stat().st_size > 500
+
+
+def test_jti_quote_appends_cited_pdf_page_once_for_multiple_items(tmp_path: Path):
+    bid_docs = tmp_path / "bid_docs"
+    output = tmp_path / "output"
+    bid_docs.mkdir()
+    output.mkdir()
+
+    source_path = bid_docs / "plans.pdf"
+    source_doc = fitz.open()
+    p1 = source_doc.new_page(width=612, height=792)
+    p1.insert_text((72, 72), "Synthetic source page 1", fontsize=14)
+    p2 = source_doc.new_page(width=612, height=792)
+    p2.insert_text((72, 72), "Synthetic source page 2 - CASEWORK DETAIL", fontsize=14)
+    source_doc.save(source_path)
+    source_doc.close()
+
+    (output / "bid_review.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "source": "plans.pdf",
+                        "page": 2,
+                        "sheet": "A8.00",
+                        "relevance_score": 12,
+                        "scope_terms": ["casework"],
+                        "signals": [],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    draft = EstimateDraft(
+        project_title="Reference Appendix Test",
+        pricing_profile_confirmed=True,
+        tax_rate_confirmed=True,
+        scope_review_confirmed=True,
+        lines=[
+            EstimateLine(
+                item=1,
+                description="Base cabinets",
+                manual_add=1000,
+                source_refs=["plans.pdf / A8.00"],
+            ),
+            EstimateLine(
+                item=2,
+                description="Upper cabinets",
+                manual_add=500,
+                source_refs=["plans.pdf / A8.00"],
+            ),
+        ],
+    )
+
+    _, pdf_path = write_jti_quote(tmp_path, draft)
+
+    result = fitz.open(pdf_path)
+    try:
+        assert result.page_count == 2
+        last_text = result[-1].get_text()
+        assert "REFERENCE PAGE" in last_text
+        assert "Quote Items 1, 2" in last_text
+        assert "plans.pdf" in last_text
+        assert "Sheet A8.00" in last_text
+        assert "PDF page 2" in last_text
+        assert "Synthetic source page 2 - CASEWORK DETAIL" in last_text
+    finally:
+        result.close()
