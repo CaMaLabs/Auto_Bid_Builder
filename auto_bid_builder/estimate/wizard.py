@@ -79,7 +79,7 @@ class EstimateWizard(tk.Toplevel):
         pricing.pack(fill="x", padx=12, pady=(0, 8))
         ttk.Label(
             pricing,
-            text="Auto Bid Builder can prefill a best-effort estimate from private local JTI cost-detail history. When history is unavailable it uses clearly marked low-confidence allowances. All generated values remain estimator-review items.",
+            text="Saved JTI historical pricing is applied automatically to matching scope. When no good match exists, Auto Bid Builder uses a clearly marked low-confidence fallback allowance. Use Add more history PDFs only when you want to expand the local pricing library.",
             wraplength=1160,
         ).grid(row=0, column=0, columnspan=10, sticky="w", pady=(0, 8))
         self.rate_vars: dict[str, tk.StringVar] = {}
@@ -131,8 +131,8 @@ class EstimateWizard(tk.Toplevel):
 
         actions = ttk.Frame(pricing)
         actions.grid(row=5, column=0, columnspan=10, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="Auto-fill best effort", command=self.auto_fill).pack(side="left")
-        ttk.Button(actions, text="Import JTI cost-detail history", command=self.import_history).pack(side="left", padx=6)
+        ttk.Button(actions, text="Rebuild auto-pricing", command=self.auto_fill).pack(side="left")
+        ttk.Button(actions, text="Add more JTI history PDFs", command=self.import_history).pack(side="left", padx=6)
         self.history_status_var = tk.StringVar(value="")
         ttk.Label(actions, textvariable=self.history_status_var).pack(side="left", padx=10)
 
@@ -145,16 +145,16 @@ class EstimateWizard(tk.Toplevel):
         ttk.Button(toolbar, text="Remove selected", command=self.remove_selected).pack(side="left")
         ttk.Label(toolbar, text="Double-click a row to edit it. Auto-filled lines remain suggestions until an estimator accepts them.").pack(side="right")
 
-        columns = ("item", "included", "description", "qty", "labor", "material", "markup", "tax", "amount")
+        columns = ("item", "included", "description", "basis", "qty", "labor", "material", "markup", "tax", "amount")
         self.tree = ttk.Treeview(lines_frame, columns=columns, show="headings", selectmode="browse", height=12)
         headings = {
-            "item": "#", "included": "In?", "description": "Description", "qty": "Qty", "labor": "Labor",
+            "item": "#", "included": "In?", "description": "Description", "basis": "Pricing basis", "qty": "Qty", "labor": "Labor",
             "material": "Material", "markup": "Markup", "tax": "Tax", "amount": "Amount",
         }
-        widths = {"item": 42, "included": 45, "description": 480, "qty": 60, "labor": 95, "material": 95, "markup": 90, "tax": 80, "amount": 105}
+        widths = {"item": 42, "included": 45, "description": 390, "basis": 105, "qty": 55, "labor": 90, "material": 90, "markup": 85, "tax": 75, "amount": 100}
         for col in columns:
             self.tree.heading(col, text=headings[col])
-            self.tree.column(col, width=widths[col], anchor="w" if col == "description" else "e")
+            self.tree.column(col, width=widths[col], anchor="w" if col in {"description", "basis"} else "e")
         self.tree.pack(side="left", fill="both", expand=True)
         scroll = ttk.Scrollbar(lines_frame, orient="vertical", command=self.tree.yview)
         scroll.pack(side="right", fill="y")
@@ -180,7 +180,14 @@ class EstimateWizard(tk.Toplevel):
         self.pricing_confirm_var.set(self.draft.pricing_profile_confirmed)
         self.tax_confirm_var.set(self.draft.tax_rate_confirmed)
         count = len(load_historical_examples())
-        self.history_status_var.set(f"{count} local historical pricing line(s) available" if count else "No private history imported yet; best effort uses provisional allowances")
+        if count:
+            self.history_status_var.set(
+                f"Historical pricing ACTIVE — {count} saved reference line(s) are used automatically when scope matches."
+            )
+        else:
+            self.history_status_var.set(
+                "No saved historical pricing yet — unmatched scope uses provisional fallback allowances."
+            )
 
     def _sync_fields(self) -> bool:
         try:
@@ -209,6 +216,15 @@ class EstimateWizard(tk.Toplevel):
                     line.item,
                     "Yes" if line.included else "No",
                     line.description,
+                    (
+                        "Historical"
+                        if "private local history" in line.estimator_note.lower()
+                        else "Fallback"
+                        if "best-effort" in line.estimator_note.lower()
+                        else "Manual"
+                        if (line.material_cost or line.manual_add or sum(line.normalized_hours().values()))
+                        else "Unpriced"
+                    ),
                     f"{line.quantity:g}",
                     f"${labor:,.2f}",
                     f"${line.material_cost:,.2f}",
@@ -269,7 +285,7 @@ class EstimateWizard(tk.Toplevel):
             )
             if not overwrite:
                 return
-        summary = apply_auto_pricing(self.draft, overwrite=overwrite, collapse_generated=True)
+        summary = apply_auto_pricing(self.draft, overwrite=overwrite, collapse_generated=False)
         self.scope_confirm_var.set(False)
         self.pricing_confirm_var.set(False)
         self.tax_confirm_var.set(False)
@@ -286,7 +302,7 @@ class EstimateWizard(tk.Toplevel):
             f"Filled {summary.filled_lines} line(s).\n\n"
             f"From private local history: {summary.historical_lines}\n"
             f"From low-confidence fallback allowances: {summary.heuristic_lines}\n"
-            f"Page-by-page review rows consolidated: {summary.collapsed_lines}\n\n"
+            "Itemized evidence rows were preserved.\n\n"
             "These are provisional values. Review the scope, quantities, rates, tax, and finishes before confirming the bid.",
             parent=self,
         )
@@ -308,7 +324,7 @@ class EstimateWizard(tk.Toplevel):
             except Exception as exc:
                 errors.append(f"{Path(filename).name}: {exc}")
         count = len(load_historical_examples())
-        self.history_status_var.set(f"{count} local historical pricing line(s) available")
+        self.history_status_var.set(f"Historical pricing ACTIVE — {count} saved reference line(s) are used automatically when scope matches.")
         if errors:
             messagebox.showwarning(
                 "Historical pricing import",
@@ -318,7 +334,7 @@ class EstimateWizard(tk.Toplevel):
         else:
             messagebox.showinfo(
                 "Historical pricing imported",
-                f"Imported {imported} private cost-detail file(s). Auto-fill can now match new scope against {count} historical line(s).\n\nThe calibration files stay on this computer and are not committed to GitHub.",
+                f"Imported {imported} private cost-detail file(s). Saved history now contains {count} pricing line(s). New/unpriced scope will use it automatically; use Rebuild auto-pricing if you want to recalculate existing provisional lines.\n\nThe calibration files stay on this computer and are not committed to GitHub.",
                 parent=self,
             )
 
