@@ -65,9 +65,12 @@ def test_workspace_review_seeds_scope_lines_and_persists(tmp_path: Path):
 
     draft = create_estimate_from_workspace(root)
     assert draft.project_title == "Retail TI"
-    assert len(draft.lines) == 2
-    assert "A8.00" in draft.lines[0].description
-    assert "millwork" in draft.lines[0].description
+    assert len(draft.lines) == 4
+    descriptions = [line.description for line in draft.lines]
+    assert "Architectural millwork (A8.00)" in descriptions
+    assert "Casework / cabinetry (A8.00)" in descriptions
+    assert "Shelving (A8.00)" in descriptions
+    assert "Wood veneer (A9.00)" in descriptions
     assert load_estimate(root) is not None
 
     draft.lines[0].manual_add = 500
