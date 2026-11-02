@@ -7,9 +7,12 @@ from auto_bid_builder.opportunities.import_csv import import_sam_opportunity_csv
 FIELDS = [
     "NoticeId", "Title", "Sol#", "Department/Ind.Agency", "Sub-Tier",
     "PostedDate", "Type", "BaseType", "SetASideCode", "SetASide",
-    "ResponseDeadLine", "NaicsCode", "ClassificationCode", "PopCity",
+    "ResponseDeadLine", "NaicsCode", "ClassificationCode", "PopStreetAddress", "PopCity",
     "PopState", "PopZip", "Active", "Office", "AwardNumber", "AwardDate",
-    "Award$", "AdditionalInfoLink", "Link", "Description",
+    "Award$", "PrimaryContactTitle", "PrimaryContactFullname", "PrimaryContactEmail",
+    "PrimaryContactPhone", "PrimaryContactFax", "SecondaryContactTitle",
+    "SecondaryContactFullname", "SecondaryContactEmail", "SecondaryContactPhone",
+    "SecondaryContactFax", "AdditionalInfoLink", "Link", "Description",
 ]
 
 
@@ -29,6 +32,7 @@ def _write_csv(path: Path) -> None:
             "ResponseDeadLine": "2026-11-20T12:00:00-08:00",
             "NaicsCode": "337212",
             "ClassificationCode": "Y1AA",
+            "PopStreetAddress": "123 Main Street",
             "PopCity": "Los Angeles",
             "PopState": "CA",
             "PopZip": "90012",
@@ -37,6 +41,16 @@ def _write_csv(path: Path) -> None:
             "AwardNumber": "",
             "AwardDate": "",
             "Award$": "",
+            "PrimaryContactTitle": "Contract Specialist",
+            "PrimaryContactFullname": "Alex Example",
+            "PrimaryContactEmail": "alex@example.gov",
+            "PrimaryContactPhone": "555-555-0100",
+            "PrimaryContactFax": "",
+            "SecondaryContactTitle": "",
+            "SecondaryContactFullname": "",
+            "SecondaryContactEmail": "",
+            "SecondaryContactPhone": "",
+            "SecondaryContactFax": "",
             "AdditionalInfoLink": "",
             "Link": "https://sam.gov/workspace/contract/opp/relevant-1/view",
             "Description": "Provide architectural millwork and custom casework.",
@@ -63,6 +77,17 @@ def _write_csv(path: Path) -> None:
             "AwardNumber": "",
             "AwardDate": "",
             "Award$": "",
+            "PopStreetAddress": "",
+            "PrimaryContactTitle": "",
+            "PrimaryContactFullname": "",
+            "PrimaryContactEmail": "",
+            "PrimaryContactPhone": "",
+            "PrimaryContactFax": "",
+            "SecondaryContactTitle": "",
+            "SecondaryContactFullname": "",
+            "SecondaryContactEmail": "",
+            "SecondaryContactPhone": "",
+            "SecondaryContactFax": "",
             "AdditionalInfoLink": "",
             "Link": "https://sam.gov/workspace/contract/opp/irrelevant-1/view",
             "Description": "IT network operations and support.",
@@ -92,8 +117,11 @@ def test_sam_full_csv_import_streams_scores_and_maps_fields(tmp_path: Path):
     assert opp["source"] == "sam.gov CSV"
     assert opp["external_id"] == "relevant-1"
     assert opp["naics_code"] == "337212"
+    assert opp["street_address"] == "123 Main Street"
     assert opp["city"] == "Los Angeles"
     assert opp["state"] == "CA"
+    assert opp["metadata"]["primary_contact"]["name"] == "Alex Example"
+    assert opp["metadata"]["primary_contact"]["email"] == "alex@example.gov"
     assert opp["url"].endswith("/relevant-1/view")
     assert opp["metadata"]["solicitation_number"] == "SOL-1"
     assert row["score"] >= 20
