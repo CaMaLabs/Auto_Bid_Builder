@@ -316,11 +316,12 @@ def apply_auto_pricing(
     *,
     overwrite: bool = False,
     calibration_dir: str | Path | None = None,
-    collapse_generated: bool = True,
+    collapse_generated: bool = False,
 ) -> AutoPriceSummary:
     """Fill zero-dollar estimate lines using local history first, then heuristics.
 
-    Existing non-zero estimator-entered values are preserved unless overwrite=True.
+    Itemization is preserved by default; callers must explicitly opt into collapsing
+    evidence rows. Existing non-zero estimator-entered values are preserved unless overwrite=True.
     Any automatic fill clears the pricing/tax confirmations so a human has to review
     the generated values before the quote can become ready.
     """
