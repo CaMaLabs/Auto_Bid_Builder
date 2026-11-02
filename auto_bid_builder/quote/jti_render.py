@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from html import escape
+import json
 from pathlib import Path
 import shutil
+from urllib.parse import urlsplit
 
 import fitz
 
@@ -19,6 +22,110 @@ _FOOTER_3 = "PH 714 974-1008"
 _FOOTER_4 = "CONTRACTORS LICENSE CA 527317"
 _FOOTER_5 = "ORANGE, CA 92865"
 _FOOTER_6 = "FX 714 974-3723"
+
+
+@dataclass(frozen=True)
+class QuoteProjectContext:
+    proposed_to: str = ""
+    job_site_lines: tuple[str, ...] = ()
+    contact_lines: tuple[str, ...] = ()
+
+
+def _workspace_opportunity(root: Path) -> dict:
+    manifest_path = root / "bid_workspace.json"
+    if not manifest_path.exists():
+        return {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    row = manifest.get("opportunity") or {}
+    if isinstance(row, dict) and isinstance(row.get("opportunity"), dict):
+        return row["opportunity"]
+    return row if isinstance(row, dict) else {}
+
+
+def _quote_project_context(root: Path, draft: EstimateDraft) -> QuoteProjectContext:
+    opportunity = _workspace_opportunity(root)
+    if not opportunity:
+        return QuoteProjectContext(job_site_lines=(draft.project_title,))
+
+    metadata = opportunity.get("metadata") if isinstance(opportunity.get("metadata"), dict) else {}
+    proposed_to = str(opportunity.get("organization") or "").strip()
+
+    job_lines: list[str] = []
+    title = str(opportunity.get("title") or draft.project_title or "").strip()
+    if title:
+        job_lines.append(title)
+
+    street = str(opportunity.get("street_address") or metadata.get("street_address") or "").strip()
+    if street:
+        job_lines.append(street)
+
+    city = str(opportunity.get("city") or "").strip()
+    state = str(opportunity.get("state") or "").strip()
+    postal = str(opportunity.get("postal_code") or "").strip()
+    city_state = ", ".join(x for x in (city, state) if x)
+    location = " ".join(x for x in (city_state, postal) if x)
+    if location:
+        job_lines.append(location)
+    elif metadata.get("location_text"):
+        job_lines.append(str(metadata.get("location_text")).strip())
+
+    source = str(opportunity.get("source") or "").strip()
+    listing_url = str(opportunity.get("url") or "").strip()
+    domain = ""
+    if listing_url:
+        try:
+            domain = (urlsplit(listing_url).hostname or "").removeprefix("www.")
+        except ValueError:
+            domain = ""
+    if source:
+        source_text = f"Source: {source}"
+        if domain and domain.lower() not in source.lower():
+            source_text += f" | {domain}"
+        job_lines.append(source_text)
+
+    identifier = (
+        metadata.get("solicitation_number")
+        or metadata.get("project_number")
+        or opportunity.get("external_id")
+    )
+    if identifier:
+        job_lines.append(f"Solicitation/Event: {identifier}")
+
+    contact = metadata.get("primary_contact") if isinstance(metadata.get("primary_contact"), dict) else {}
+    if not contact:
+        contact = {
+            "name": metadata.get("contact_name") or metadata.get("poc_name"),
+            "title": metadata.get("contact_title") or metadata.get("poc_title"),
+            "email": metadata.get("contact_email") or metadata.get("poc_email"),
+            "phone": metadata.get("contact_phone") or metadata.get("poc_phone"),
+        }
+
+    contact_lines: list[str] = []
+    name = str(contact.get("name") or contact.get("fullname") or "").strip()
+    title_value = str(contact.get("title") or "").strip()
+    if name:
+        contact_lines.append(name)
+    if title_value:
+        contact_lines.append(title_value)
+    email = str(contact.get("email") or "").strip()
+    phone = str(contact.get("phone") or "").strip()
+    if email:
+        contact_lines.append(email)
+    if phone:
+        contact_lines.append(phone)
+
+    return QuoteProjectContext(
+        proposed_to=proposed_to,
+        job_site_lines=tuple(job_lines[:6]),
+        contact_lines=tuple(contact_lines[:4]),
+    )
+
+
+def _html_lines(values: tuple[str, ...]) -> str:
+    return "<br>".join(escape(str(value)) for value in values if str(value).strip())
 
 
 def _status(draft: EstimateDraft) -> str:
@@ -41,10 +148,14 @@ def _line_block_html(draft: EstimateDraft, line) -> str:
     )
 
 
-def _html(draft: EstimateDraft) -> str:
+def _html(draft: EstimateDraft, context: QuoteProjectContext | None = None) -> str:
+    context = context or QuoteProjectContext(job_site_lines=(draft.project_title,))
     blocks = "".join(_line_block_html(draft, line) for line in draft.lines if line.included)
     warnings = "".join(f"<li>{escape(w)}</li>" for w in draft.warnings())
     notes = escape(draft.general_notes).replace("\n", "<br>") or ""
+    proposed_to = escape(context.proposed_to)
+    job_site = _html_lines(context.job_site_lines)
+    contact = _html_lines(context.contact_lines)
     return f"""<!doctype html>
 <html><head><meta charset='utf-8'><title>JTI Quotation</title>
 <style>
@@ -59,7 +170,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; m
 .meta-row {{ font-size:12px; font-weight:700; padding:4px 0 10px; }}
 .meta-row > div {{ text-align:center; }}
 .people-head {{ display:grid; grid-template-columns: 1fr 1fr 1fr; background:#ddd; border:1px solid #333; font-size:8px; text-align:center; }}
-.people-row {{ display:grid; grid-template-columns:1fr 1fr 1fr; min-height:76px; padding:8px 48px 0; gap:45px; }}
+.people-row {{ display:grid; grid-template-columns:1fr 1fr 1fr; min-height:92px; padding:8px 24px 0; gap:28px; font-size:9px; line-height:13px; }}
 .rule {{ border-top:1px solid #000; margin:8px 0 14px; }}
 .status {{ font-weight:700; color:#8b0000; margin-bottom:8px; }}
 .warning {{ border:1px solid #8b0000; padding:6px 10px; margin:6px 0 10px; }}
@@ -79,7 +190,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; m
 <div class='meta-head'><div>Number</div><div>Date</div><div>Description</div><div>Completion</div><div>Terms</div><div>Rep</div></div>
 <div class='meta-row'><div>{escape(draft.quote_number or 'DRAFT')}</div><div>{escape(draft.quote_date)}</div><div>{escape(draft.project_title)}</div><div></div><div>{escape(draft.terms or '')}</div><div>{escape(draft.rep or '')}</div></div>
 <div class='people-head'><div>Proposed To</div><div>Job Site</div><div>Contact</div></div>
-<div class='people-row'><div></div><div>{escape(draft.project_title)}</div><div></div></div>
+<div class='people-row'><div>{proposed_to}</div><div>{job_site}</div><div>{contact}</div></div>
 <div class='rule'></div>
 {f"<div class='status'>{_status(draft)}</div><div class='warning'><b>Internal review required:</b><ul>{warnings}</ul></div>" if warnings else ''}
 {blocks}
@@ -96,10 +207,11 @@ def write_jti_quote(root: str | Path, draft: EstimateDraft) -> tuple[Path, Path]
     output.mkdir(parents=True, exist_ok=True)
     html_path = output / JTI_QUOTE_HTML
     pdf_path = output / JTI_QUOTE_PDF
-    html_text = _html(draft)
+    context = _quote_project_context(root, draft)
+    html_text = _html(draft, context)
     html_path.write_text(html_text, encoding="utf-8")
     (output / LEGACY_PREVIEW_HTML).write_text(html_text, encoding="utf-8")
-    _write_pdf(pdf_path, draft)
+    _write_pdf(pdf_path, draft, context)
     shutil.copy2(pdf_path, output / LEGACY_PREVIEW_PDF)
 
     # Local-only bundle for a second-pass AI/human audit. Import lazily to avoid a
@@ -137,7 +249,8 @@ def _gray_bar(page: fitz.Page, y: float, labels: tuple[str, ...]) -> None:
         page.insert_text((x, y + 10), label, fontsize=6.2, fontname="helv")
 
 
-def _write_pdf(path: Path, draft: EstimateDraft) -> None:
+def _write_pdf(path: Path, draft: EstimateDraft, context: QuoteProjectContext | None = None) -> None:
+    context = context or QuoteProjectContext(job_site_lines=(draft.project_title,))
     doc = fitz.open()
     lines = [line for line in draft.lines if line.included]
     page_no = 0
@@ -161,7 +274,27 @@ def _write_pdf(path: Path, draft: EstimateDraft) -> None:
             page.draw_rect(fitz.Rect(12, 151, 600, 165), color=(0, 0, 0), fill=(0.86, 0.86, 0.86), width=0.6)
             for x, text in ((52, "Proposed To"), (252, "Job Site"), (483, "Contact")):
                 page.insert_text((x, 161), text, fontsize=6.2)
-            page.insert_text((252, 184), draft.project_title[:38], fontsize=9)
+            page.insert_textbox(
+                fitz.Rect(31, 174, 190, 239),
+                context.proposed_to,
+                fontsize=7.5,
+                fontname="helv",
+                lineheight=1.15,
+            )
+            page.insert_textbox(
+                fitz.Rect(215, 174, 408, 239),
+                "\n".join(context.job_site_lines),
+                fontsize=7.2,
+                fontname="helv",
+                lineheight=1.12,
+            )
+            page.insert_textbox(
+                fitz.Rect(430, 174, 590, 239),
+                "\n".join(context.contact_lines),
+                fontsize=7.2,
+                fontname="helv",
+                lineheight=1.12,
+            )
             page.draw_line((12, 248), (600, 248), width=0.7)
             y = 262.0
             if draft.warnings():
