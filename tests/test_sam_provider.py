@@ -101,3 +101,37 @@ def test_saved_sam_key_is_used_even_if_old_disabled_flag_remains(monkeypatch):
     assert result["total_shown"] == 1
     assert result["opportunities"][0]["opportunity"]["source"] == "sam.gov"
     assert result["source_stats"][0]["auto_enabled_from_saved_key"] is True
+
+
+def test_sam_normalizer_preserves_nested_job_site_and_poc():
+    row = sam._normalize(
+        {
+            "noticeId": "NOTICE-POC",
+            "title": "Federal Casework",
+            "data": {
+                "placeOfPerformance": {
+                    "streetAddress": "500 Federal Plaza",
+                    "city": {"name": "Los Angeles"},
+                    "state": {"code": "CA"},
+                    "zip": "90012",
+                },
+                "pointOfContact": [
+                    {
+                        "type": "primary",
+                        "title": "Contracting Officer",
+                        "fullname": "Taylor Example",
+                        "email": "taylor@example.gov",
+                        "phone": "555-555-0199",
+                    }
+                ],
+            },
+        },
+        api_key="test-key",
+        hydrate_description=False,
+    )
+    assert row.street_address == "500 Federal Plaza"
+    assert row.city == "Los Angeles"
+    assert row.state == "CA"
+    assert row.postal_code == "90012"
+    assert row.metadata["primary_contact"]["name"] == "Taylor Example"
+    assert row.metadata["primary_contact"]["email"] == "taylor@example.gov"
