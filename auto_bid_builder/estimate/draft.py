@@ -176,7 +176,37 @@ def load_estimate(root: str | Path) -> EstimateDraft | None:
     return EstimateDraft.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
+_ITEMIZED_SCOPE_LABELS: dict[str, str] = {
+    "millwork": "Architectural millwork",
+    "casework": "Casework / cabinetry",
+    "cabinetry": "Casework / cabinetry",
+    "shelving": "Shelving",
+    "reception desk": "Reception desk",
+    "countertop": "Countertops / worktops",
+    "counter": "Counters",
+    "wood veneer": "Wood veneer",
+    "wood cladding": "Wood cladding",
+    "locker": "Lockers",
+    "wood beam": "Wood beams",
+    "banquette": "Banquettes",
+    "cashwrap": "Cashwrap / backwrap",
+    "panel": "Decorative panels",
+}
+
+
+def _itemized_scope_label(term: str) -> str:
+    cleaned = str(term or "").strip().lower()
+    return _ITEMIZED_SCOPE_LABELS.get(cleaned, cleaned.replace("_", " ").title() or "Architectural millwork")
+
+
 def _candidate_lines_from_review(root: Path) -> list[EstimateLine]:
+    """Create evidence-backed estimate rows without collapsing unrelated scope.
+
+    Rows are itemized by canonical scope type and drawing/spec reference. Synonyms
+    such as casework/cabinetry on the same reference become one line, while the same
+    scope on a different sheet/page remains separately reviewable. This intentionally
+    favors estimator visibility over a small number of broad allowance buckets.
+    """
     review = root / "output" / "bid_review.json"
     if not review.exists():
         return []
@@ -185,30 +215,73 @@ def _candidate_lines_from_review(root: Path) -> list[EstimateLine]:
     except (OSError, json.JSONDecodeError):
         return []
 
-    grouped: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
     for row in payload.get("pages", []):
         sheet = str(row.get("sheet") or "").strip()
         source = str(row.get("source") or "Bid document")
         page = int(row.get("page") or 0)
-        key = sheet or f"{source} p.{page}"
-        group = grouped.setdefault(key, {"sheet": sheet, "source": source, "page": page, "terms": [], "score": 0})
-        group["score"] = max(int(group.get("score", 0)), int(row.get("relevance_score", 0) or 0))
-        for term in row.get("scope_terms") or []:
-            term = str(term).strip().lower()
-            if term and term not in group["terms"]:
-                group["terms"].append(term)
+        location = sheet or f"page {page}"
+        ref = f"{source} / {sheet}" if sheet else f"{source} / page {page}"
+        score = int(row.get("relevance_score", 0) or 0)
 
-    ordered = sorted(grouped.values(), key=lambda item: (-int(item["score"]), item["sheet"] or item["source"]))
+        labels: list[str] = []
+        for raw_term in row.get("scope_terms") or []:
+            label = _itemized_scope_label(str(raw_term))
+            if label not in labels:
+                labels.append(label)
+
+        # A page can be relevant because it explicitly assigns responsibility to the
+        # millworker even when it does not repeat a fabrication noun.
+        if not labels:
+            for signal in row.get("signals") or []:
+                if (
+                    str(signal.get("kind") or "") == "responsibility"
+                    and str(signal.get("value") or "").startswith("millworker_")
+                ):
+                    labels.append("Architectural millwork responsibility")
+                    break
+
+        for label in labels:
+            key = (source.lower(), location.lower(), label.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            description = f"{label} ({location})"
+            candidates.append(
+                {
+                    "score": score,
+                    "source": source,
+                    "page": page,
+                    "sheet": sheet,
+                    "label": label,
+                    "description": description,
+                    "ref": ref,
+                }
+            )
+
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            -int(item["score"]),
+            item["source"].lower(),
+            item["sheet"].lower() if item["sheet"] else f"{int(item['page']):06d}",
+            item["label"].lower(),
+        ),
+    )
     lines: list[EstimateLine] = []
-    for index, group in enumerate(ordered[:30], start=1):
-        terms = ", ".join(group["terms"][:6]) or "millwork-related content"
-        if group["sheet"]:
-            description = f"Review scope shown on {group['sheet']} — detected {terms}."
-            ref = f"{group['source']} / {group['sheet']}"
-        else:
-            description = f"Review scope in {group['source']} page {group['page']} — detected {terms}."
-            ref = f"{group['source']} / page {group['page']}"
-        lines.append(EstimateLine(item=index, description=description, source_refs=[ref]))
+    for index, item in enumerate(ordered[:100], start=1):
+        lines.append(
+            EstimateLine(
+                item=index,
+                description=item["description"],
+                source_refs=[item["ref"]],
+                estimator_note=(
+                    f"AUTO-SCOPE: {item['label']} detected from {item['ref']}. "
+                    "Verify actual quantity, dimensions, finish, and responsibility."
+                ),
+            )
+        )
     return lines
 
 
@@ -232,7 +305,7 @@ def create_estimate_from_workspace(root: str | Path, project_title: str | None =
         # wall of zero-dollar rows.
         from .autoprice import apply_auto_pricing
 
-        apply_auto_pricing(draft, overwrite=False, collapse_generated=True)
+        apply_auto_pricing(draft, overwrite=False, collapse_generated=False)
     save_estimate(root, draft)
     return draft
 
