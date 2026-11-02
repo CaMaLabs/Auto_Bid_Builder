@@ -31,6 +31,23 @@ DOWNLOADABLE_CONTENT_TYPES = {
     "application/octet-stream",
 }
 
+_DOCUMENT_PAGE_HINTS = (
+    "bid document", "bid documents", "project document", "project documents",
+    "contract document", "contract documents", "solicitation document",
+    "solicitation documents", "event package", "bid package", "attachments",
+    "attachment", "plans and specs", "plans & specs", "plans/specs",
+    "specifications", "addenda", "downloads", "download center", "project files",
+)
+_DOWNLOAD_ACTION_HINTS = (
+    "download", "attachment", "file download", "get file", "view pdf",
+    "open pdf", "plans pdf", "specifications pdf", "addendum pdf",
+)
+_NAVIGATION_EXCLUSIONS = (
+    "login", "log in", "sign in", "register", "registration", "vendor portal",
+    "help", "privacy", "terms", "contact us", "home",
+)
+_MAX_INTERMEDIATE_DOCUMENT_PAGES = 12
+
 
 @dataclass
 class ProjectFilePullResult:
@@ -125,6 +142,45 @@ def _looks_like_file_url(url: str) -> bool:
     return Path(urlsplit(url).path).suffix.lower() in DOWNLOADABLE_EXTENSIONS
 
 
+def _same_host(left: str, right: str) -> bool:
+    try:
+        return (urlsplit(left).hostname or "").lower() == (urlsplit(right).hostname or "").lower()
+    except ValueError:
+        return False
+
+
+def _looks_like_download_action(link: str, text: str) -> bool:
+    """Recognize public attachment/download actions whose URL has no file extension."""
+    if _looks_like_file_url(link):
+        return True
+    haystack = f"{urlsplit(link).path} {urlsplit(link).query} {text}".lower()
+    if any(exclusion in haystack for exclusion in _NAVIGATION_EXCLUSIONS):
+        return False
+    return any(hint in haystack for hint in _DOWNLOAD_ACTION_HINTS)
+
+
+def _looks_like_document_page(link: str, text: str, *, parent_url: str) -> bool:
+    """Return True for a likely intermediate public document index.
+
+    Intermediate traversal is deliberately same-host and keyword-gated. Direct file
+    links may still point at public CDNs or other hosts, but the crawler will not
+    wander through unrelated external pages.
+    """
+    if _looks_like_file_url(link) or not _same_host(parent_url, link):
+        return False
+    try:
+        parsed = urlsplit(link)
+    except ValueError:
+        return False
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix and suffix not in {".htm", ".html", ".php", ".asp", ".aspx"}:
+        return False
+    haystack = f"{parsed.path} {parsed.query} {text}".lower()
+    if any(exclusion in haystack for exclusion in _NAVIGATION_EXCLUSIONS):
+        return False
+    return any(hint in haystack for hint in _DOCUMENT_PAGE_HINTS)
+
+
 def _request(url: str, *, timeout: float, opener=None):
     request = Request(
         url,
@@ -148,6 +204,8 @@ def _read_html(url: str, *, timeout: float, max_html_bytes: int, opener=None) ->
     with _request(url, timeout=timeout, opener=opener) as response:
         content_type = response.headers.get_content_type()
         final_url = response.geturl()
+        if not _is_public_http_url(final_url):
+            raise ValueError("redirect target is not a public HTTP(S) address")
         if content_type in DOWNLOADABLE_CONTENT_TYPES or _looks_like_file_url(final_url):
             return final_url, ""
         body = response.read(max_html_bytes + 1)
@@ -163,28 +221,67 @@ def discover_listing_files(
     timeout: float = 25.0,
     max_html_bytes: int = 4_000_000,
     opener=None,
+    follow_intermediate_pages: bool = True,
+    max_intermediate_pages: int = _MAX_INTERMEDIATE_DOCUMENT_PAGES,
 ) -> list[str]:
-    """Return direct-looking document links from one public opportunity page.
+    """Discover public bid files from a listing and likely nested document pages.
 
-    This intentionally does not submit forms, bypass logins, execute JavaScript, or
-    recursively crawl a site. Provider-specific public event-package support is
-    handled separately.
+    The initial listing is always inspected. When enabled, one additional navigation
+    level is followed for same-host links that look like document indexes such as
+    "Bid Documents", "Attachments", "Event Package", or "Plans & Specs". The helper
+    also accepts download/attachment actions whose URLs do not end in a file
+    extension; the actual response is validated by the downloader.
+
+    This remains intentionally bounded: it does not submit forms, bypass logins,
+    execute JavaScript, or recursively crawl arbitrary site navigation.
     """
     if not _is_public_http_url(url):
         return []
-    final_url, html = _read_html(url, timeout=timeout, max_html_bytes=max_html_bytes, opener=opener)
-    if not html:
-        return [final_url] if _looks_like_file_url(final_url) else []
-    parser = _LinkParser(final_url)
-    parser.feed(html)
+
     output: list[str] = []
-    seen: set[str] = set()
-    for link in parser.links:
-        if link in seen or not _is_public_http_url(link):
-            continue
-        if _looks_like_file_url(link):
-            seen.add(link)
-            output.append(link)
+    seen_files: set[str] = set()
+    seen_pages: set[str] = set()
+
+    def collect(page_url: str, *, allow_nested: bool) -> list[str]:
+        final_url, html = _read_html(
+            page_url,
+            timeout=timeout,
+            max_html_bytes=max_html_bytes,
+            opener=opener,
+        )
+        if not html:
+            if final_url not in seen_files and _looks_like_file_url(final_url):
+                seen_files.add(final_url)
+                output.append(final_url)
+            return []
+
+        parser = _LinkParser(final_url)
+        parser.feed(html)
+        nested_pages: list[str] = []
+        for link, text in parser.links_with_text:
+            if not _is_public_http_url(link):
+                continue
+            if _looks_like_file_url(link) or _looks_like_download_action(link, text):
+                if link not in seen_files:
+                    seen_files.add(link)
+                    output.append(link)
+                continue
+            if allow_nested and _looks_like_document_page(link, text, parent_url=final_url):
+                if link not in seen_pages:
+                    seen_pages.add(link)
+                    nested_pages.append(link)
+        return nested_pages
+
+    seen_pages.add(url)
+    nested = collect(url, allow_nested=follow_intermediate_pages)
+    if follow_intermediate_pages:
+        for page_url in nested[:max(0, int(max_intermediate_pages))]:
+            try:
+                collect(page_url, allow_nested=False)
+            except Exception:
+                # One broken intermediate page should not prevent downloading files
+                # found elsewhere on the listing.
+                continue
     return output
 
 
@@ -278,6 +375,8 @@ def _download(url: str, destination: Path, *, timeout: float, max_bytes: int, op
     with _request(url, timeout=timeout, opener=opener) as response:
         content_type = response.headers.get_content_type()
         final_url = response.geturl()
+        if not _is_public_http_url(final_url):
+            raise ValueError("redirect target is not a public HTTP(S) address")
         is_file = content_type in DOWNLOADABLE_CONTENT_TYPES or _looks_like_file_url(final_url)
         if not is_file:
             return None
@@ -328,8 +427,9 @@ def pull_opportunity_documents(
 ) -> ProjectFilePullResult:
     """Best-effort download of public project files already linked by an opportunity.
 
-    Direct attachment URLs are tried first. The public listing itself is inspected one
-    level deep for obvious document links. Cal eProcure event URLs additionally follow
+    Direct attachment URLs are tried first. The public listing itself is inspected for
+    direct downloads and one bounded level of likely document-index pages. Cal eProcure
+    event URLs additionally follow
     the public guest "View Event Package" route. Authentication boundaries are
     respected: a login page simply produces no downloadable files and the user can use
     the normal manual/provider-login workflow instead.
