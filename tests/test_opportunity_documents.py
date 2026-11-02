@@ -194,3 +194,47 @@ def test_download_action_detection_accepts_extensionless_attachment_links():
         "https://example.com/register",
         "Register",
     )
+
+
+def test_caleprocure_view_event_package_button_target_is_detected():
+    html = (
+        '<html><body>'
+        '<button onclick="window.location.href=\'/PSRelay/event-package?AUC_ID=123\'">'
+        'View Event Package'
+        '</button>'
+        '</body></html>'
+    )
+    target = documents._find_caleprocure_event_package_target(
+        "https://caleprocure.ca.gov/event/7760/123",
+        html,
+    )
+    assert target == "https://caleprocure.ca.gov/PSRelay/event-package?AUC_ID=123"
+
+
+def test_caleprocure_view_event_package_formaction_is_detected():
+    html = (
+        '<html><body>'
+        '<button formaction="/PSRelay/package?AUC_ID=456" aria-label="View Event Package">'
+        'View Event Package'
+        '</button>'
+        '</body></html>'
+    )
+    target = documents._find_caleprocure_event_package_target(
+        "https://caleprocure.ca.gov/event/7760/456",
+        html,
+    )
+    assert target == "https://caleprocure.ca.gov/PSRelay/package?AUC_ID=456"
+
+
+def test_caleprocure_view_event_package_without_target_falls_back():
+    html = '<button type="button">View Event Package</button>'
+    target = documents._find_caleprocure_event_package_target(
+        "https://caleprocure.ca.gov/event/7760/789",
+        html,
+    )
+    assert target is None
+    fallback = documents._caleprocure_package_url(
+        "https://caleprocure.ca.gov/event/7760/789"
+    )
+    assert fallback is not None
+    assert "AUC_ID=789" in fallback
