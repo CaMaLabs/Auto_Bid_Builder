@@ -260,12 +260,30 @@ def analyze_workspace(root: str | Path) -> dict:
     }
     (root / "output" / ANALYSIS_NAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     (root / "output" / ANALYSIS_MARKDOWN_NAME).write_text(_review_markdown(root, payload), encoding="utf-8")
+
+    # A fresh document review must invalidate stale quote/estimate output. If the
+    # existing estimate is still entirely machine-generated and unconfirmed, rebuild
+    # it automatically from this new review. Preserve manual/reviewed estimates but
+    # force them back through estimator review instead of silently overwriting them.
+    try:
+        from .estimate.draft import refresh_estimate_after_analysis
+        estimate_refresh = refresh_estimate_after_analysis(root)
+    except Exception as exc:
+        estimate_refresh = {
+            "status": "refresh_failed",
+            "line_count": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    payload["estimate_refresh"] = estimate_refresh
+    (root / "output" / ANALYSIS_NAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
     analysis = manifest.setdefault("analysis", {})
     reviewed_count = len(pdfs) + len(docx_files)
     analysis.update({
         "status": "complete" if reviewed_count and not errors else ("partial" if reviewed_count else "no_supported_docs"),
         "last_run_at": payload["generated_at"], "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "relevant_page_count": len(pages), "review_only_count": len(review_only), "error_count": len(errors),
+        "estimate_refresh_status": estimate_refresh.get("status"),
     })
     workflow = manifest.setdefault("workflow", {})
     workflow["documents_added"] = bool(manifest.get("documents")) or bool(reviewed_count)
