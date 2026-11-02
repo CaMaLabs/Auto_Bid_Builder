@@ -305,6 +305,72 @@ def rebuild_itemized_scope_from_workspace(root: str | Path, draft: EstimateDraft
     return len(draft.lines)
 
 
+def _line_is_auto_generated(line: EstimateLine) -> bool:
+    note = str(line.estimator_note or "")
+    return "AUTO-SCOPE:" in note
+
+
+def _remove_stale_quote_outputs(root: Path) -> None:
+    output = root / "output"
+    for name in (
+        "jti_quote.pdf",
+        "jti_quote.html",
+        "quote_preview.pdf",
+        "quote_preview.html",
+        "AI_review_package.zip",
+    ):
+        try:
+            (output / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def refresh_estimate_after_analysis(root: str | Path) -> dict[str, Any]:
+    """Synchronize a saved estimate with a newly generated document review.
+
+    Unreviewed machine-generated scope is rebuilt automatically from the new review,
+    which prevents stale false-positive lines from surviving scanner improvements.
+    Estimates that appear to contain estimator-reviewed/manual work are preserved but
+    their review confirmations are cleared and stale quote outputs are removed.
+    """
+    root = Path(root)
+    draft = load_estimate(root)
+    _remove_stale_quote_outputs(root)
+    if draft is None:
+        return {"status": "no_estimate", "line_count": 0}
+
+    auto_generated = bool(draft.lines) and all(_line_is_auto_generated(line) for line in draft.lines)
+    estimator_confirmed = (
+        draft.scope_review_confirmed
+        or draft.pricing_profile_confirmed
+        or draft.tax_rate_confirmed
+    )
+
+    if auto_generated and not estimator_confirmed:
+        count = rebuild_itemized_scope_from_workspace(root, draft)
+        return {
+            "status": "rebuilt_auto_generated",
+            "line_count": count,
+        }
+
+    # Preserve any manual/reviewed estimate, but never let a fresh document analysis
+    # leave it appearing ready for quote.
+    draft.scope_review_confirmed = False
+    draft.pricing_profile_confirmed = False
+    draft.tax_rate_confirmed = False
+    marker = (
+        "STALE-SCOPE: Bid documents were re-analyzed after this estimate was created. "
+        "Review or rebuild itemized scope before generating a quote."
+    )
+    if marker not in draft.general_notes:
+        draft.general_notes = (draft.general_notes + "\n" + marker).strip()
+    save_estimate(root, draft)
+    return {
+        "status": "manual_estimate_preserved_stale",
+        "line_count": len(draft.lines),
+    }
+
+
 def create_estimate_from_workspace(root: str | Path, project_title: str | None = None) -> EstimateDraft:
     root = Path(root)
     if project_title is None:
