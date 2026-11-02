@@ -72,7 +72,7 @@ def test_saved_sam_key_is_used_even_if_old_disabled_flag_remains(monkeypatch):
                 title="Federal interior renovation",
                 naics_code="337212",
                 state="CA",
-                bid_due_date="2026-10-15",
+                bid_due_date="2026-11-15",
             )
         ]
 
@@ -135,3 +135,41 @@ def test_sam_normalizer_preserves_nested_job_site_and_poc():
     assert row.postal_code == "90012"
     assert row.metadata["primary_contact"]["name"] == "Taylor Example"
     assert row.metadata["primary_contact"]["email"] == "taylor@example.gov"
+
+
+def test_get_sam_opportunity_by_notice_id_uses_notice_and_posted_day(monkeypatch):
+    captured: list[str] = []
+
+    def fake_get_json(url: str, **kwargs):
+        captured.append(url)
+        return {
+            "opportunitiesData": [
+                {
+                    "noticeId": "NOTICE-CSV",
+                    "title": "Federal Millwork",
+                    "postedDate": "2026-10-31",
+                    "responseDeadLine": "2026-11-15T15:00:00-08:00",
+                    "resourceLinks": [
+                        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/file-1/download"
+                    ],
+                    "additionalInfoLink": "https://example.gov/project-documents",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(sam, "_get_json", fake_get_json)
+    row = sam.get_sam_opportunity_by_notice_id(
+        api_key="saved-key",
+        notice_id="NOTICE-CSV",
+        posted_date="2026-10-31 12:00:00",
+    )
+
+    assert row is not None
+    assert row.external_id == "NOTICE-CSV"
+    assert row.attachments == (
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/file-1/download",
+    )
+    assert row.url == "https://example.gov/project-documents"
+    assert "noticeid=NOTICE-CSV" in captured[0]
+    assert "postedFrom=10%2F31%2F2026" in captured[0]
+    assert "postedTo=10%2F31%2F2026" in captured[0]
