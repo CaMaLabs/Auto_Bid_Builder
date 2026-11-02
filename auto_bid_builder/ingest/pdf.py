@@ -7,7 +7,7 @@ import re
 import fitz
 
 
-SHEET_RE = re.compile(r"\b([A-Z]{1,2}\d{1,2}\.\d{2})\b", re.I)
+SHEET_RE = re.compile(r"\b([A-Z]{1,3}\d{1,2}\.\d{1,2}[A-Z]?)\b", re.I)
 
 
 @dataclass(frozen=True)
