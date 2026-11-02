@@ -533,8 +533,20 @@ class AutoBidBuilderApp(tk.Tk):
 
     def _analysis_finished(self, payload: dict) -> None:
         self._refresh_bid_tab()
+        refresh = payload.get("estimate_refresh") or {}
+        refresh_status = str(refresh.get("status") or "")
         if payload.get("pdf_count", 0) == 0:
             self.status.set("No PDFs found. Add plan/spec PDFs and run review again.")
+        elif refresh_status == "rebuilt_auto_generated":
+            self.status.set(
+                f"Document review complete: {payload.get('relevant_page_count', 0)} relevant page(s). "
+                f"Stale auto-generated estimate replaced with {int(refresh.get('line_count', 0) or 0)} current scope line(s)."
+            )
+        elif refresh_status == "manual_estimate_preserved_stale":
+            self.status.set(
+                f"Document review complete: {payload.get('relevant_page_count', 0)} relevant page(s). "
+                "Existing estimator-edited scope was preserved but marked stale; review/rebuild it before quoting."
+            )
         else:
             self.status.set(f"Document review complete: {payload.get('relevant_page_count', 0)} relevant page(s) identified.")
 
