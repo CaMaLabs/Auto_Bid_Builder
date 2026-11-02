@@ -175,6 +175,12 @@ def test_reanalysis_replaces_stale_unreviewed_auto_estimate(tmp_path: Path):
     draft = create_estimate_from_workspace(root)
     assert len(draft.lines) == 2
     assert all("AUTO-SCOPE:" in line.estimator_note for line in draft.lines)
+    # Even a previously confirmed quote must be rebuilt if its scope is still
+    # entirely machine-generated and has no manual-edit marker.
+    draft.scope_review_confirmed = True
+    draft.pricing_profile_confirmed = True
+    draft.tax_rate_confirmed = True
+    save_estimate(root, draft)
 
     # Stale quote files must not survive the corrected analysis.
     for name in ("jti_quote.pdf", "jti_quote.html", "quote_preview.pdf", "quote_preview.html"):
