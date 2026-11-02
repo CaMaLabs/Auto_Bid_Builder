@@ -1,4 +1,5 @@
 import csv
+from datetime import datetime, timezone
 from pathlib import Path
 
 from auto_bid_builder.opportunities.import_csv import import_sam_opportunity_csv
@@ -92,6 +93,43 @@ def _write_csv(path: Path) -> None:
             "Link": "https://sam.gov/workspace/contract/opp/irrelevant-1/view",
             "Description": "IT network operations and support.",
         },
+        {
+            "NoticeId": "expired-1",
+            "Title": "Expired federal architectural millwork package",
+            "Sol#": "SOL-OLD",
+            "Department/Ind.Agency": "TEST AGENCY",
+            "Sub-Tier": "",
+            "PostedDate": "2026-10-01 12:00:00",
+            "Type": "Solicitation",
+            "BaseType": "Solicitation",
+            "SetASideCode": "",
+            "SetASide": "",
+            "ResponseDeadLine": "2026-11-01T12:00:00-08:00",
+            "NaicsCode": "337212",
+            "ClassificationCode": "Y1AA",
+            "PopStreetAddress": "",
+            "PopCity": "Los Angeles",
+            "PopState": "CA",
+            "PopZip": "90012",
+            "Active": "Yes",
+            "Office": "TEST OFFICE",
+            "AwardNumber": "",
+            "AwardDate": "",
+            "Award$": "",
+            "PrimaryContactTitle": "",
+            "PrimaryContactFullname": "",
+            "PrimaryContactEmail": "",
+            "PrimaryContactPhone": "",
+            "PrimaryContactFax": "",
+            "SecondaryContactTitle": "",
+            "SecondaryContactFullname": "",
+            "SecondaryContactEmail": "",
+            "SecondaryContactPhone": "",
+            "SecondaryContactFax": "",
+            "AdditionalInfoLink": "",
+            "Link": "https://sam.gov/workspace/contract/opp/expired-1/view",
+            "Description": "Provide architectural millwork and casework.",
+        },
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS)
@@ -107,10 +145,12 @@ def test_sam_full_csv_import_streams_scores_and_maps_fields(tmp_path: Path):
         path,
         preferred_states={"CA"},
         minimum_score=20,
+        now=datetime(2026, 11, 2, 20, 0, tzinfo=timezone.utc),
     )
 
-    assert payload["rows_scanned"] == 2
-    assert payload["total_normalized"] == 2
+    assert payload["rows_scanned"] == 3
+    assert payload["total_normalized"] == 3
+    assert payload["expired_filtered"] == 1
     assert payload["total_shown"] == 1
     row = payload["opportunities"][0]
     opp = row["opportunity"]
