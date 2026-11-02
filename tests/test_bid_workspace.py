@@ -112,3 +112,38 @@ def test_ai_review_package_contains_bid_docs_and_audit_outputs(tmp_path: Path):
     assert "estimate/estimate_draft.json" in names
     assert "output/bid_review.json" in names
     assert "output/jti_quote.pdf" in names
+
+
+def test_electrical_equipment_cabinets_and_panels_are_not_priceable(tmp_path: Path):
+    root = _workspace(tmp_path)
+    source = tmp_path / "electrical_equipment.pdf"
+    _pdf(
+        source,
+        "BATTERY CHARGER control and monitoring panel. "
+        "NEMA 250 Type 1 wall-mounted cabinet. "
+        "SECTION 262716 ELECTRICAL CABINETS AND ENCLOSURES. "
+        "Shop drawings for custom enclosures and cabinets. "
+        "COMMUNICATIONS cabinets and terminal cabinets.",
+    )
+    add_documents(root, [source])
+    review = analyze_workspace(root)
+    assert review["relevant_page_count"] == 0
+    assert review["pages"] == []
+
+
+def test_architectural_cabinets_still_price_with_material_context(tmp_path: Path):
+    root = _workspace(tmp_path)
+    source = tmp_path / "A8.10.pdf"
+    _pdf(
+        source,
+        "A8.10 ARCHITECTURAL MILLWORK. Provide wood veneer base cabinets, "
+        "plastic laminate upper cabinets, casework and solid-surface countertops.",
+    )
+    add_documents(root, [source])
+    review = analyze_workspace(root)
+    assert review["relevant_page_count"] == 1
+    terms = set(review["pages"][0]["scope_terms"])
+    assert "millwork" in terms
+    assert "casework" in terms
+    assert "cabinetry" in terms
+    assert "countertop" in terms
