@@ -3,6 +3,11 @@ import zipfile
 
 import fitz
 
+from auto_bid_builder.estimate.draft import (
+    create_estimate_from_workspace,
+    load_estimate,
+    save_estimate,
+)
 from auto_bid_builder.bid_workspace import (
     add_documents,
     analyze_workspace,
@@ -145,3 +150,92 @@ def test_architectural_cabinets_still_price_with_material_context(tmp_path: Path
     terms = set(review["pages"][0]["scope_terms"])
     assert "millwork" in terms
     assert "cabinetry" in terms
+
+
+def test_reanalysis_replaces_stale_unreviewed_auto_estimate(tmp_path: Path):
+    root = _workspace(tmp_path)
+
+    # Simulate an estimate created by the older, over-broad detector.
+    old_review = {
+        "pages": [
+            {
+                "source": "electrical.pdf",
+                "page": 1,
+                "sheet": None,
+                "relevance_score": 12,
+                "scope_terms": ["cabinetry", "panel"],
+                "signals": [],
+            }
+        ]
+    }
+    (root / "output" / "bid_review.json").write_text(
+        __import__("json").dumps(old_review),
+        encoding="utf-8",
+    )
+    draft = create_estimate_from_workspace(root)
+    assert len(draft.lines) == 2
+    assert all("AUTO-SCOPE:" in line.estimator_note for line in draft.lines)
+
+    # Stale quote files must not survive the corrected analysis.
+    for name in ("jti_quote.pdf", "jti_quote.html", "quote_preview.pdf", "quote_preview.html"):
+        (root / "output" / name).write_bytes(b"stale")
+
+    source = tmp_path / "electrical.pdf"
+    _pdf(
+        source,
+        "SECTION 262716 ELECTRICAL CABINETS AND ENCLOSURES. "
+        "NEMA 250 wall-mounted cabinet and control panel.",
+    )
+    add_documents(root, [source])
+
+    review = analyze_workspace(root)
+
+    assert review["relevant_page_count"] == 0
+    assert review["estimate_refresh"]["status"] == "rebuilt_auto_generated"
+    assert review["estimate_refresh"]["line_count"] == 0
+    refreshed = load_estimate(root)
+    assert refreshed is not None
+    assert refreshed.lines == []
+    assert not (root / "output" / "jti_quote.pdf").exists()
+    assert not (root / "output" / "quote_preview.pdf").exists()
+
+
+def test_reanalysis_preserves_manual_estimate_but_marks_it_stale(tmp_path: Path):
+    root = _workspace(tmp_path)
+    old_review = {
+        "pages": [
+            {
+                "source": "plans.pdf",
+                "page": 1,
+                "sheet": "A8.10",
+                "relevance_score": 12,
+                "scope_terms": ["millwork"],
+                "signals": [],
+            }
+        ]
+    }
+    (root / "output" / "bid_review.json").write_text(
+        __import__("json").dumps(old_review),
+        encoding="utf-8",
+    )
+    draft = create_estimate_from_workspace(root)
+    draft.lines[0].description = "Estimator-entered custom scope"
+    draft.lines[0].estimator_note = "MANUAL: estimator adjusted this line."
+    draft.scope_review_confirmed = True
+    draft.pricing_profile_confirmed = True
+    draft.tax_rate_confirmed = True
+    save_estimate(root, draft)
+
+    source = tmp_path / "electrical.pdf"
+    _pdf(source, "ELECTRICAL CABINETS AND ENCLOSURES. NEMA control panel.")
+    add_documents(root, [source])
+    review = analyze_workspace(root)
+
+    assert review["estimate_refresh"]["status"] == "manual_estimate_preserved_stale"
+    refreshed = load_estimate(root)
+    assert refreshed is not None
+    assert refreshed.lines[0].description == "Estimator-entered custom scope"
+    assert refreshed.scope_review_confirmed is False
+    assert refreshed.pricing_profile_confirmed is False
+    assert refreshed.tax_rate_confirmed is False
+    assert "STALE-SCOPE:" in refreshed.general_notes
