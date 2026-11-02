@@ -56,6 +56,14 @@ def test_update_script_waits_runs_installer_logs_and_relaunches():
         log_path=Path(r"C:\Users\Example\AppData\Local\JTI\AutoBidBuilder\update.log"),
     )
     assert "while (Get-Process -Id $PidToWait" in script
+    assert "Get-Process -Name 'AutoBidBuilder'" in script
+    assert "Stop-Process -Force" in script
     assert "'/VERYSILENT'" in script
+    assert "'/FORCECLOSEAPPLICATIONS'" in script
+    assert "'/NORESTARTAPPLICATIONS'" in script
+    assert "$DirArg = '/DIR=\\\"' + $InstallDir + '\\\"'" in script
+    assert "$LogArg = '/LOG=\\\"' + $InstallerLog + '\\\"'" in script
+    assert "Smoke-testing replaced executable" in script
+    assert "Start-Process -FilePath $Exe -ArgumentList @('--smoke-test')" in script
     assert "Start-Process -FilePath $Exe" in script
     assert "UPDATE FAILED" in script
