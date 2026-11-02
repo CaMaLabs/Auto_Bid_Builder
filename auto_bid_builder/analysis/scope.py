@@ -15,7 +15,7 @@ from auto_bid_builder.ingest.pdf import extract_pdf_pages
 _STRONG_SCOPE_TERMS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("millwork", re.compile(r"\b(?:architectural\s+)?millwork\b", re.I)),
     ("casework", re.compile(r"\bcasework\b", re.I)),
-    ("cabinetry", re.compile(r"\bcabinet(?:ry|s)?\b", re.I)),
+    ("cabinetry", re.compile(r"\bcabinetry\b", re.I)),
     ("shelving", re.compile(r"\bshelv(?:e|es|ing)\b|\bfloating\s+shel(?:f|ves)\b", re.I)),
     ("reception desk", re.compile(r"\breception\s+desk\b", re.I)),
     ("countertop", re.compile(r"\bcountertop(?:s)?\b|\bworktop(?:s)?\b", re.I)),
@@ -30,20 +30,41 @@ _STRONG_SCOPE_TERMS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # Generic terms are accepted only with fabrication/material context.
 _CONTEXTUAL_SCOPE_TERMS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
     (
+        "cabinetry",
+        re.compile(r"\bcabinets?\b", re.I),
+        re.compile(
+            r"\b(?:architectural|wood|plywood|veneer|laminate|plam|millwork|casework|"
+            r"base\s+cabinet|wall\s+cabinet|upper\s+cabinet|tall\s+cabinet|storage\s+cabinet|"
+            r"kitchen|reception|solid\s+surface|countertop)\b",
+            re.I,
+        ),
+    ),
+    (
         "counter",
         re.compile(r"\bcounter(?:s)?\b", re.I),
-        re.compile(r"\b(?:solid\s+surface|plastic\s+laminate|plam|stone|wood|veneer|millwork|casework|cabinet|transaction|service|reception)\b", re.I),
+        re.compile(r"\b(?:solid\s+surface|plastic\s+laminate|plam|stone|wood|veneer|millwork|casework|transaction|service|reception)\b", re.I),
     ),
     (
         "panel",
         re.compile(r"\bpanel(?:s)?\b", re.I),
-        re.compile(r"\b(?:wood|veneer|mdf|millwork|casework|cabinet|decorative|laminate|plam|ribbed|slat(?:ted)?)\b", re.I),
+        re.compile(r"\b(?:wood|veneer|mdf|millwork|casework|decorative|laminate|plam|ribbed|slat(?:ted)?)\b", re.I),
     ),
 )
 
 _FALSE_POSITIVE_PHRASES = re.compile(
-    r"\b(?:over[- ]the[- ]counter|counter[- ]slop(?:e|ing)|panelboard|electrical\s+panel|"
-    r"playground\s+(?:gear\s+)?panel|metal\s+panel|control\s+panel|access\s+panel)\b",
+    r"\b(?:over[- ]the[- ]counter|counter[- ]slop(?:e|ing)|panelboards?|electrical\s+panels?|"
+    r"playground\s+(?:gear\s+)?panels?|metal\s+panels?|control(?:\s+and\s+monitoring)?\s+panels?|"
+    r"monitoring\s+panels?|pump\s+control\s+panels?|access\s+panels?|communications\s+cabinets?|"
+    r"terminal\s+cabinets?|sheet\s+metal\s+cabinets?|electrical\s+cabinets?|spare[- ]fuse\s+cabinets?|"
+    r"switchboards?|motor[- ]control\s+centers?|distribution\s+panels?)\b",
+    re.I,
+)
+
+_NON_MILLWORK_EQUIPMENT_CONTEXT = re.compile(
+    r"\b(?:NFPA\s*70|NEMA\s*(?:1|3R|4X|12|250)|UL\s*(?:50|50E|508A)|"
+    r"electrical|communications?|conduit|raceway|switchboard|panelboard|generator|"
+    r"battery\s+charger|terminal\s+strip|circuit\s+breaker|VFD|PLC|SCADA|"
+    r"enclosure|wiring|conductor|transformer)\b",
     re.I,
 )
 _DEMOLITION = re.compile(r"\b(?:remove|demolish|demo|existing\s+to\s+be\s+removed|salvage)\b", re.I)
@@ -90,8 +111,11 @@ def _positive_scope_terms(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
             nearby = _context(text, match.start(), match.end())
             if _FALSE_POSITIVE_PHRASES.search(nearby):
                 continue
-            # Generic counter/panel references must have nearby fabrication/material
-            # context. This intentionally prefers precision over recall.
+            if _NON_MILLWORK_EQUIPMENT_CONTEXT.search(nearby):
+                continue
+            # Generic cabinet/counter/panel references must have nearby
+            # architectural fabrication/material context. This intentionally
+            # prefers precision over recall.
             if not required_context.search(nearby):
                 continue
             target = demolition if _DEMOLITION.search(nearby) else positive
