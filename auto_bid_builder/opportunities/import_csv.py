@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 from pathlib import Path
 
+from .deadlines import is_past_due
 from .models import Opportunity
 from .score import OpportunityScore, score_opportunity
 
@@ -81,6 +83,7 @@ def import_sam_opportunity_csv(
     *,
     preferred_states: set[str] | None = None,
     minimum_score: float = 0.0,
+    now: datetime | None = None,
 ) -> dict:
     """Stream a SAM.gov full contract-opportunity CSV into the normal review queue.
 
@@ -91,6 +94,7 @@ def import_sam_opportunity_csv(
     preferred = {str(x).upper() for x in (preferred_states or set())}
     scanned = 0
     normalized = 0
+    expired_filtered = 0
     deduped: dict[str, OpportunityScore] = {}
 
     with source.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
@@ -108,6 +112,9 @@ def import_sam_opportunity_csv(
             if opportunity is None:
                 continue
             normalized += 1
+            if is_past_due(opportunity.bid_due_date, now=now):
+                expired_filtered += 1
+                continue
             scored = score_opportunity(opportunity, preferred_states=preferred)
             if scored.score < float(minimum_score):
                 continue
@@ -132,6 +139,7 @@ def import_sam_opportunity_csv(
                 "file": source.name,
                 "scanned": scanned,
                 "normalized": normalized,
+                "expired_filtered": expired_filtered,
                 "shown": len(shown),
             }
         ],
@@ -142,4 +150,5 @@ def import_sam_opportunity_csv(
         "opportunities": [row.to_dict() for row in shown],
         "imported_file": str(source),
         "rows_scanned": scanned,
+        "expired_filtered": expired_filtered,
     }
