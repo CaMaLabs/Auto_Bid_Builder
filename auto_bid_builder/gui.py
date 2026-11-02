@@ -256,8 +256,10 @@ class AutoBidBuilderApp(tk.Tk):
         self._render_opportunities(payload)
         scanned = int(payload.get("rows_scanned", 0) or 0)
         shown = int(payload.get("total_shown", 0) or 0)
+        expired = int(payload.get("expired_filtered", 0) or 0)
         self.status.set(
-            f"Imported SAM CSV: scanned {scanned:,} row(s); {shown:,} met the current review threshold."
+            f"Imported SAM CSV: scanned {scanned:,} row(s); discarded {expired:,} past-due row(s); "
+            f"{shown:,} met the current review threshold."
         )
 
     def _render_opportunities(self, payload: dict) -> None:
