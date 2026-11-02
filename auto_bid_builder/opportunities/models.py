@@ -20,6 +20,7 @@ class Opportunity:
     organization: str | None = None
     posted_date: str | None = None
     bid_due_date: str | None = None
+    street_address: str | None = None
     city: str | None = None
     state: str | None = None
     postal_code: str | None = None
