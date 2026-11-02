@@ -485,8 +485,18 @@ class EstimateWizard(tk.Toplevel):
             line.labor_hours = hours
             line.source_refs = [value.strip() for value in refs.get("1.0", "end").splitlines() if value.strip()]
             line.estimator_note = note.get("1.0", "end").strip()
+            if not is_new and "AUTO-SCOPE:" in line.estimator_note and "MANUAL-EDIT:" not in line.estimator_note:
+                line.estimator_note = (
+                    line.estimator_note
+                    + "\nMANUAL-EDIT: Estimator edited this generated scope line."
+                ).strip()
             line.included = bool(included_var.get())
             if is_new:
+                if "MANUAL:" not in line.estimator_note:
+                    line.estimator_note = (
+                        line.estimator_note
+                        + "\nMANUAL: Estimator-added scope line."
+                    ).strip()
                 self.draft.lines.append(line)
             self._reset_tuning_baseline()
             self.labor_adjust_var.set(100.0)
