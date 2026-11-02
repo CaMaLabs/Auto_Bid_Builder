@@ -15,6 +15,7 @@ from .draft import (
     EstimateLine,
     create_estimate_from_workspace,
     load_estimate,
+    rebuild_itemized_scope_from_workspace,
     save_estimate,
 )
 
@@ -143,6 +144,11 @@ class EstimateWizard(tk.Toplevel):
         ttk.Button(toolbar, text="Add scope item", command=self.add_line).pack(side="left")
         ttk.Button(toolbar, text="Edit selected", command=self.edit_selected).pack(side="left", padx=6)
         ttk.Button(toolbar, text="Remove selected", command=self.remove_selected).pack(side="left")
+        ttk.Button(
+            toolbar,
+            text="Rebuild itemized scope from documents",
+            command=self.rebuild_itemized_scope,
+        ).pack(side="left", padx=(12, 0))
         ttk.Label(toolbar, text="Double-click a row to edit it. Auto-filled lines remain suggestions until an estimator accepts them.").pack(side="right")
 
         columns = ("item", "included", "description", "basis", "qty", "labor", "material", "markup", "tax", "amount")
@@ -346,6 +352,34 @@ class EstimateWizard(tk.Toplevel):
             return int(selected[0].split("-", 1)[1])
         except (IndexError, ValueError):
             return None
+
+    def rebuild_itemized_scope(self) -> None:
+        if not self._sync_fields():
+            return
+        if not messagebox.askyesno(
+            "Rebuild itemized scope",
+            "Replace the current scope lines with a fresh itemized set from the latest document review?\n\n"
+            "Quote information and labor-rate settings will be kept. Existing line edits will be replaced.",
+            parent=self,
+        ):
+            return
+        count = rebuild_itemized_scope_from_workspace(self.workspace, self.draft)
+        self.scope_confirm_var.set(False)
+        self.pricing_confirm_var.set(False)
+        self.tax_confirm_var.set(False)
+        self._reset_tuning_baseline()
+        self.labor_adjust_var.set(100.0)
+        self.material_adjust_var.set(100.0)
+        self.markup_adjust_var.set(self._current_markup_percent())
+        self.install_rate_var.set(float(self.draft.labor_rates.get("I", 0.0) or 0.0))
+        self._load_fields()
+        self._refresh_lines()
+        messagebox.showinfo(
+            "Itemized scope rebuilt",
+            f"Rebuilt {count} itemized scope line(s) from the current document review.\n\n"
+            "Each scope type/reference stays separately reviewable and pricing uses saved historical matches first.",
+            parent=self,
+        )
 
     def add_line(self) -> None:
         item = max((line.item for line in self.draft.lines), default=0) + 1
