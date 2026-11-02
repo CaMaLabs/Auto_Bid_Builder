@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from html.parser import HTMLParser
 from http.cookiejar import CookieJar
 import ipaddress
+import json
 import mimetypes
 from pathlib import Path
 import re
@@ -512,7 +513,7 @@ def _merge_hydrated_sam_opportunity(root: Path, opportunity_row: dict, hydrated)
             manifest["opportunity"] = stored
             save_manifest(root, manifest)
             (root / "opportunity.json").write_text(
-                __import__("json").dumps(stored, indent=2),
+                json.dumps(stored, indent=2),
                 encoding="utf-8",
             )
     except Exception:
