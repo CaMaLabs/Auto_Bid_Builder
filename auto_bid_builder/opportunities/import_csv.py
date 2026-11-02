@@ -37,6 +37,7 @@ def _normalize_sam_csv_row(row: dict[str, str], *, source_file: str) -> Opportun
         organization=organization,
         posted_date=_text(row, "PostedDate") or None,
         bid_due_date=_text(row, "ResponseDeadLine") or None,
+        street_address=_text(row, "PopStreetAddress") or None,
         city=_text(row, "PopCity") or _text(row, "City") or None,
         state=_text(row, "PopState") or _text(row, "State") or None,
         postal_code=_text(row, "PopZip") or _text(row, "ZipCode") or None,
@@ -56,6 +57,20 @@ def _normalize_sam_csv_row(row: dict[str, str], *, source_file: str) -> Opportun
             "award_date": _text(row, "AwardDate") or None,
             "award_value": _text(row, "Award$") or None,
             "additional_info_link": _text(row, "AdditionalInfoLink") or None,
+            "primary_contact": {
+                "title": _text(row, "PrimaryContactTitle") or None,
+                "name": _text(row, "PrimaryContactFullname") or None,
+                "email": _text(row, "PrimaryContactEmail") or None,
+                "phone": _text(row, "PrimaryContactPhone") or None,
+                "fax": _text(row, "PrimaryContactFax") or None,
+            },
+            "secondary_contact": {
+                "title": _text(row, "SecondaryContactTitle") or None,
+                "name": _text(row, "SecondaryContactFullname") or None,
+                "email": _text(row, "SecondaryContactEmail") or None,
+                "phone": _text(row, "SecondaryContactPhone") or None,
+                "fax": _text(row, "SecondaryContactFax") or None,
+            },
             "imported_from_csv": source_file,
         },
     )
