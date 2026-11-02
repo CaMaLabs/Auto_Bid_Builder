@@ -80,6 +80,10 @@ def _quote_project_context(root: Path, draft: EstimateDraft) -> QuoteProjectCont
             domain = (urlsplit(listing_url).hostname or "").removeprefix("www.")
         except ValueError:
             domain = ""
+    due = str(opportunity.get("bid_due_date") or "").strip()
+    if due:
+        job_lines.append(f"Bid due: {due}")
+
     if source:
         source_text = f"Source: {source}"
         if domain and domain.lower() not in source.lower():
