@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from auto_bid_builder.settings import AppSettings, SecretStore, cache_path, load_settings
+from .deadlines import is_past_due
 from .models import Opportunity
 from .providers.public import fetch_cca_opportunities, fetch_dgs_resd_opportunities, fetch_rss_atom
 from .providers.sam import JTI_NAICS_CODES, search_sam_opportunities
@@ -96,7 +97,9 @@ def sync_opportunities(settings: AppSettings, secret_store: SecretStore | None =
         except Exception as exc:
             errors.append({"source": provider.label, "error": f"{type(exc).__name__}: {exc}"})
 
-    normalized = _dedupe(opportunities)
+    deduped = _dedupe(opportunities)
+    expired = [opp for opp in deduped if is_past_due(opp.bid_due_date)]
+    normalized = [opp for opp in deduped if not is_past_due(opp.bid_due_date)]
     scored = score_opportunities(normalized, preferred_states=set(settings.preferred_states))
     shown = [row for row in scored if row.score >= settings.minimum_score]
 
@@ -117,6 +120,7 @@ def sync_opportunities(settings: AppSettings, secret_store: SecretStore | None =
         "source_stats": source_stats,
         "errors": errors,
         "total_normalized": len(normalized),
+        "expired_filtered": len(expired),
         "minimum_score": settings.minimum_score,
         "total_shown": len(shown),
         "opportunities": [row.to_dict() for row in shown],
