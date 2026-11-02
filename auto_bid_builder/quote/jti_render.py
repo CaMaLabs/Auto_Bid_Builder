@@ -5,6 +5,7 @@ from html import escape
 import json
 from pathlib import Path
 import shutil
+import re
 from urllib.parse import urlsplit
 
 import fitz
@@ -29,6 +30,129 @@ class QuoteProjectContext:
     proposed_to: str = ""
     job_site_lines: tuple[str, ...] = ()
     contact_lines: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QuoteReferencePage:
+    source_path: Path
+    source_name: str
+    page_number: int
+    sheet: str = ""
+    item_numbers: tuple[int, ...] = ()
+    source_refs: tuple[str, ...] = ()
+
+
+def _normalize_ref(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _find_bid_document(root: Path, source_name: str) -> Path | None:
+    bid_docs = root / "bid_docs"
+    if not bid_docs.exists():
+        return None
+    wanted = source_name.strip().lower()
+    for path in bid_docs.rglob("*"):
+        if path.is_file() and path.name.lower() == wanted:
+            return path
+    return None
+
+
+def _reference_pages(root: Path, draft: EstimateDraft) -> tuple[QuoteReferencePage, ...]:
+    """Resolve estimate source refs back to the exact PDF pages in bid_docs."""
+    review_path = root / "output" / "bid_review.json"
+    review_rows: list[dict] = []
+    if review_path.exists():
+        try:
+            payload = json.loads(review_path.read_text(encoding="utf-8"))
+            review_rows = [row for row in payload.get("pages", []) if isinstance(row, dict)]
+        except (OSError, json.JSONDecodeError):
+            review_rows = []
+
+    index: dict[str, dict] = {}
+    for row in review_rows:
+        source = str(row.get("source") or "").strip()
+        if not source:
+            continue
+        page_number = int(row.get("page") or 0)
+        sheet = str(row.get("sheet") or "").strip()
+        if sheet:
+            index[_normalize_ref(f"{source} / {sheet}")] = row
+        if page_number > 0:
+            index[_normalize_ref(f"{source} / page {page_number}")] = row
+
+    grouped: dict[tuple[str, int], dict] = {}
+    for line in draft.lines:
+        if not line.included:
+            continue
+        for raw_ref in line.source_refs:
+            ref = str(raw_ref or "").strip()
+            if not ref:
+                continue
+            row = index.get(_normalize_ref(ref))
+            source_name = ""
+            page_number = 0
+            sheet = ""
+            if row is not None:
+                source_name = str(row.get("source") or "").strip()
+                page_number = int(row.get("page") or 0)
+                sheet = str(row.get("sheet") or "").strip()
+            else:
+                # Support manually entered "file.pdf / page N" references even
+                # when the bid review JSON is unavailable.
+                match = re.match(r"^(.*?)\s*/\s*page\s+(\d+)\s*$", ref, re.I)
+                if match:
+                    source_name = match.group(1).strip()
+                    page_number = int(match.group(2))
+
+            if not source_name or page_number <= 0:
+                continue
+            source_path = _find_bid_document(root, source_name)
+            if source_path is None or source_path.suffix.lower() != ".pdf":
+                continue
+            key = (str(source_path.resolve()).lower(), page_number)
+            entry = grouped.setdefault(
+                key,
+                {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "page_number": page_number,
+                    "sheet": sheet,
+                    "items": [],
+                    "refs": [],
+                },
+            )
+            if line.item not in entry["items"]:
+                entry["items"].append(line.item)
+            if ref not in entry["refs"]:
+                entry["refs"].append(ref)
+            if sheet and not entry["sheet"]:
+                entry["sheet"] = sheet
+
+    pages: list[QuoteReferencePage] = []
+    for entry in grouped.values():
+        try:
+            with fitz.open(entry["source_path"]) as source_doc:
+                if not (1 <= int(entry["page_number"]) <= source_doc.page_count):
+                    continue
+        except Exception:
+            continue
+        pages.append(
+            QuoteReferencePage(
+                source_path=entry["source_path"],
+                source_name=entry["source_name"],
+                page_number=int(entry["page_number"]),
+                sheet=str(entry["sheet"] or ""),
+                item_numbers=tuple(sorted(int(x) for x in entry["items"])),
+                source_refs=tuple(entry["refs"]),
+            )
+        )
+    pages.sort(key=lambda row: (min(row.item_numbers or (999999,)), row.source_name.lower(), row.page_number))
+    return tuple(pages)
+
+
+def _reference_text(line) -> str:
+    refs = [str(ref).strip() for ref in line.source_refs if str(ref).strip()]
+    return " | ".join(refs)
 
 
 def _workspace_opportunity(root: Path) -> dict:
@@ -137,12 +261,16 @@ def _status(draft: EstimateDraft) -> str:
 
 
 def _line_block_html(draft: EstimateDraft, line) -> str:
+    reference = _reference_text(line)
+    description = escape(line.description)
+    if reference:
+        description += f"<div class='ref'>Ref: {escape(reference)} — reference page appended to PDF</div>"
     return (
         "<div class='lineblock'>"
         "<div class='bar'><span>Item</span><span>Description</span><span>Qty</span><span>Each</span><span>Code</span><span>Tax Each</span><span>Amount</span></div>"
         "<div class='row'>"
         f"<span class='center'>{line.item}</span>"
-        f"<span>{escape(line.description)}</span>"
+        f"<span>{description}</span>"
         f"<span class='num'>{line.quantity:g}</span>"
         f"<span class='num'>{line.quote_each(draft.labor_rates):,.2f}</span>"
         f"<span class='center'>{escape(line.code)}</span>"
@@ -183,7 +311,7 @@ body {{ font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; m
 .bar {{ background:#ddd; border:1px solid #333; font-size:8px; padding:2px 0; }}
 .bar span {{ text-align:center; }} .bar span:nth-child(2) {{ text-align:left; }}
 .row {{ padding:5px 0 1px; font-size:10px; }}
-.row span {{ padding:0 4px; }} .num {{ text-align:right; white-space:nowrap; }} .center {{ text-align:center; }}
+.row span {{ padding:0 4px; }} .ref {{ margin-top:3px; font-size:7px; color:#444; }} .num {{ text-align:right; white-space:nowrap; }} .center {{ text-align:center; }}
 .notesbar {{ display:grid; grid-template-columns:1fr 180px; background:#ddd; border:1px solid #333; font-size:9px; font-weight:700; padding:3px 8px; margin-top:6px; }}
 .notesbar div:last-child {{ text-align:right; }}
 .notesrow {{ display:grid; grid-template-columns:1fr 180px; padding:10px 24px; }}
@@ -215,7 +343,7 @@ def write_jti_quote(root: str | Path, draft: EstimateDraft) -> tuple[Path, Path]
     html_text = _html(draft, context)
     html_path.write_text(html_text, encoding="utf-8")
     (output / LEGACY_PREVIEW_HTML).write_text(html_text, encoding="utf-8")
-    _write_pdf(pdf_path, draft, context)
+    _write_pdf(pdf_path, draft, context, root=root)
     shutil.copy2(pdf_path, output / LEGACY_PREVIEW_PDF)
 
     # Local-only bundle for a second-pass AI/human audit. Import lazily to avoid a
@@ -253,7 +381,13 @@ def _gray_bar(page: fitz.Page, y: float, labels: tuple[str, ...]) -> None:
         page.insert_text((x, y + 10), label, fontsize=6.2, fontname="helv")
 
 
-def _write_pdf(path: Path, draft: EstimateDraft, context: QuoteProjectContext | None = None) -> None:
+def _write_pdf(
+    path: Path,
+    draft: EstimateDraft,
+    context: QuoteProjectContext | None = None,
+    *,
+    root: Path | None = None,
+) -> None:
     context = context or QuoteProjectContext(job_site_lines=(draft.project_title,))
     doc = fitz.open()
     lines = [line for line in draft.lines if line.included]
@@ -312,7 +446,9 @@ def _write_pdf(path: Path, draft: EstimateDraft, context: QuoteProjectContext | 
 
         while index < len(lines):
             line = lines[index]
-            text_lines = max(1, (len(line.description) + 57) // 58)
+            reference = _reference_text(line)
+            combined_text = line.description + (f"\nRef: {reference} — reference page appended" if reference else "")
+            text_lines = max(1, (len(combined_text) + 57) // 58)
             block_h = max(45.0, 28.0 + text_lines * 9.5)
             reserve_for_notes = 125.0 if index == len(lines) - 1 else 0.0
             if y + block_h + reserve_for_notes > 730:
@@ -320,7 +456,7 @@ def _write_pdf(path: Path, draft: EstimateDraft, context: QuoteProjectContext | 
             _gray_bar(page, y, ("Item", "Description", "Qty", "Each", "Code", "Tax Each", "Amount"))
             y += 22
             page.insert_text((36, y), str(line.item), fontsize=8)
-            page.insert_textbox(fitz.Rect(68, y - 8, 332, y + block_h - 12), line.description, fontsize=8.2, fontname="helv")
+            page.insert_textbox(fitz.Rect(68, y - 8, 332, y + block_h - 12), combined_text, fontsize=8.0, fontname="helv")
             page.insert_text((338, y), f"{line.quantity:g}", fontsize=8)
             page.insert_text((385, y), f"{line.quote_each(draft.labor_rates):,.2f}", fontsize=8)
             page.insert_text((451, y), line.code[:7], fontsize=8)
@@ -347,6 +483,45 @@ def _write_pdf(path: Path, draft: EstimateDraft, context: QuoteProjectContext | 
                 page.insert_textbox(fitz.Rect(31, y - 5, 455, y + 70), draft.general_notes, fontsize=8.2)
             page.insert_text((531, y + 4), f"{draft.total:,.2f}", fontsize=12, fontname="hebo")
         _footer(page)
+
+    if root is not None:
+        references = _reference_pages(root, draft)
+        for reference in references:
+            try:
+                source_doc = fitz.open(reference.source_path)
+            except Exception:
+                continue
+            try:
+                source_index = reference.page_number - 1
+                if source_index < 0 or source_index >= source_doc.page_count:
+                    continue
+                source_page = source_doc[source_index]
+                header_height = 30.0
+                width = float(source_page.rect.width)
+                height = float(source_page.rect.height)
+                ref_page = doc.new_page(width=width, height=height + header_height)
+                items = ", ".join(str(x) for x in reference.item_numbers)
+                sheet = f" | Sheet {reference.sheet}" if reference.sheet else ""
+                header = (
+                    f"REFERENCE PAGE — Quote Item{'s' if len(reference.item_numbers) != 1 else ''} {items}"
+                    f" | {reference.source_name}{sheet} | PDF page {reference.page_number}"
+                )
+                ref_page.insert_textbox(
+                    fitz.Rect(12, 6, width - 12, header_height - 4),
+                    header,
+                    fontsize=8.5,
+                    fontname="hebo",
+                    align=fitz.TEXT_ALIGN_LEFT,
+                )
+                ref_page.show_pdf_page(
+                    fitz.Rect(0, header_height, width, height + header_height),
+                    source_doc,
+                    source_index,
+                    keep_proportion=True,
+                    overlay=True,
+                )
+            finally:
+                source_doc.close()
 
     doc.save(path)
     doc.close()
