@@ -257,17 +257,36 @@ def _build_update_script(*, package: Path, package_kind: str, exe_path: Path, in
         "Write-UpdateLog 'Updater helper started.'",
         "try {",
         "  Write-UpdateLog ('Waiting for process ' + $PidToWait + ' to exit.')",
-        "  while (Get-Process -Id $PidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }",
-        "  Start-Sleep -Milliseconds 800",
+        "  while (Get-Process -Id $PidToWait -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }",
+        "  Write-UpdateLog 'Waiting for any remaining AutoBidBuilder process using the installed executable.'",
+        "  for ($i = 0; $i -lt 60; $i++) {",
+        "    $Remaining = @(Get-Process -Name 'AutoBidBuilder' -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -eq $Exe } catch { $false } })",
+        "    if ($Remaining.Count -eq 0) { break }",
+        "    Start-Sleep -Milliseconds 250",
+        "  }",
+        "  $Remaining = @(Get-Process -Name 'AutoBidBuilder' -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -eq $Exe } catch { $false } })",
+        "  if ($Remaining.Count -gt 0) {",
+        "    Write-UpdateLog ('Force-closing ' + $Remaining.Count + ' stale AutoBidBuilder process(es).')",
+        "    $Remaining | Stop-Process -Force -ErrorAction SilentlyContinue",
+        "    Start-Sleep -Milliseconds 750",
+        "  }",
     ]
     if package_kind == "installer":
         common.extend(
             [
                 "  Write-UpdateLog 'Launching silent installer.'",
-                "  $Args = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS')",
+                "  $InstallerLog = [System.IO.Path]::ChangeExtension($Log, '.installer.log')",
+                "  $DirArg = '/DIR=\"' + $InstallDir + '\"'",
+                "  $LogArg = '/LOG=\"' + $InstallerLog + '\"'",
+                "  $Args = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/FORCECLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS',$DirArg,$LogArg)",
                 "  $Installer = Start-Process -FilePath $Package -ArgumentList $Args -Wait -PassThru",
                 "  Write-UpdateLog ('Installer exit code: ' + $Installer.ExitCode)",
-                "  if ($Installer.ExitCode -ne 0) { throw ('Installer failed with exit code ' + $Installer.ExitCode) }",
+                "  if ($Installer.ExitCode -ne 0) { throw ('Installer failed with exit code ' + $Installer.ExitCode + '. See ' + $InstallerLog) }",
+                "  if (-not (Test-Path $Exe)) { throw 'Installed executable was not found after installer completed.' }",
+                "  Write-UpdateLog 'Smoke-testing replaced executable.'",
+                "  $Smoke = Start-Process -FilePath $Exe -ArgumentList @('--smoke-test') -Wait -PassThru",
+                "  Write-UpdateLog ('Smoke-test exit code: ' + $Smoke.ExitCode)",
+                "  if ($Smoke.ExitCode -ne 0) { throw ('Updated executable failed smoke test with exit code ' + $Smoke.ExitCode) }",
             ]
         )
     else:
