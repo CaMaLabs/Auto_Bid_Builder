@@ -61,8 +61,8 @@ def test_update_script_waits_runs_installer_logs_and_relaunches():
     assert "'/VERYSILENT'" in script
     assert "'/FORCECLOSEAPPLICATIONS'" in script
     assert "'/NORESTARTAPPLICATIONS'" in script
-    assert "$DirArg = '/DIR=\\\"' + $InstallDir + '\\\"'" in script
-    assert "$LogArg = '/LOG=\\\"' + $InstallerLog + '\\\"'" in script
+    assert "$DirArg = '/DIR=\"' + $InstallDir + '\"'" in script
+    assert "$LogArg = '/LOG=\"' + $InstallerLog + '\"'" in script
     assert "Smoke-testing replaced executable" in script
     assert "Start-Process -FilePath $Exe -ArgumentList @('--smoke-test')" in script
     assert "Start-Process -FilePath $Exe" in script
