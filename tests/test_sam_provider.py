@@ -173,3 +173,47 @@ def test_get_sam_opportunity_by_notice_id_uses_notice_and_posted_day(monkeypatch
     assert "noticeid=NOTICE-CSV" in captured[0]
     assert "postedFrom=10%2F31%2F2026" in captured[0]
     assert "postedTo=10%2F31%2F2026" in captured[0]
+
+
+def test_sync_hides_past_due_sam_opportunities(monkeypatch):
+    def fake_search_sam_opportunities(**kwargs):
+        return [
+            Opportunity(
+                source="sam.gov",
+                external_id="SAM-EXPIRED",
+                title="Expired millwork solicitation",
+                naics_code="337212",
+                state="CA",
+                bid_due_date="2026-11-01T12:00:00-08:00",
+            ),
+            Opportunity(
+                source="sam.gov",
+                external_id="SAM-FUTURE",
+                title="Current millwork solicitation",
+                naics_code="337212",
+                state="CA",
+                bid_due_date="2099-11-15T12:00:00-08:00",
+            ),
+        ]
+
+    monkeypatch.setattr(sync_module, "search_sam_opportunities", fake_search_sam_opportunities)
+    settings = AppSettings(
+        preferred_states=["CA"],
+        lookback_days=30,
+        minimum_score=20.0,
+        providers=[
+            ProviderSettings(
+                id="sam",
+                label="SAM.gov Contract Opportunities",
+                kind="sam",
+                enabled=True,
+                credential_fields=("api_key",),
+            )
+        ],
+    )
+
+    result = sync_module.sync_opportunities(settings, _FakeSecrets())
+
+    assert result["expired_filtered"] == 1
+    assert result["total_shown"] == 1
+    assert result["opportunities"][0]["opportunity"]["external_id"] == "SAM-FUTURE"
