@@ -180,6 +180,7 @@ _ITEMIZED_SCOPE_LABELS: dict[str, str] = {
     "millwork": "Architectural millwork",
     "casework": "Casework / cabinetry",
     "cabinetry": "Casework / cabinetry",
+    "cabinet": "Casework / cabinetry",
     "shelving": "Shelving",
     "reception desk": "Reception desk",
     "countertop": "Countertops / worktops",
