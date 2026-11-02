@@ -144,7 +144,9 @@ def _looks_like_file_url(url: str) -> bool:
 
 def _same_host(left: str, right: str) -> bool:
     try:
-        return (urlsplit(left).hostname or "").lower() == (urlsplit(right).hostname or "").lower()
+        left_host = (urlsplit(left).hostname or "").lower().removeprefix("www.")
+        right_host = (urlsplit(right).hostname or "").lower().removeprefix("www.")
+        return bool(left_host) and left_host == right_host
     except ValueError:
         return False
 
