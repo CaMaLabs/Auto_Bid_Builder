@@ -34,7 +34,7 @@ DOWNLOADABLE_CONTENT_TYPES = {
 _DOCUMENT_PAGE_HINTS = (
     "bid document", "bid documents", "project document", "project documents",
     "contract document", "contract documents", "solicitation document",
-    "solicitation documents", "event package", "bid package", "attachments",
+    "solicitation documents", "view event package", "event package", "bid package", "attachments",
     "attachment", "plans and specs", "plans & specs", "plans/specs",
     "specifications", "addenda", "downloads", "download center", "project files",
 )
@@ -66,36 +66,74 @@ class ProjectFilePullResult:
         return data
 
 
+def _action_url_from_attrs(base_url: str, attrs: dict[str, str]) -> str | None:
+    for key in ("href", "formaction", "data-href", "data-url"):
+        value = str(attrs.get(key) or "").strip()
+        if value:
+            return urljoin(base_url, value)
+
+    onclick = str(attrs.get("onclick") or "")
+    patterns = (
+        r"""(?:window\.)?location(?:\.href)?\s*=\s*['"]([^'"]+)['"]""",
+        r"""window\.open\(\s*['"]([^'"]+)['"]""",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, onclick, re.I)
+        if match:
+            return urljoin(base_url, match.group(1))
+    return None
+
+
 class _LinkParser(HTMLParser):
     def __init__(self, base_url: str) -> None:
         super().__init__()
         self.base_url = base_url
         self.links: list[str] = []
         self.links_with_text: list[tuple[str, str]] = []
+        self.controls: list[tuple[str | None, str]] = []
         self._href: str | None = None
         self._parts: list[str] = []
+        self._active_tag: str | None = None
+
+    def _finish(self) -> None:
+        text = " ".join("".join(self._parts).split())
+        if self._active_tag in {"button", "input"}:
+            self.controls.append((self._href, text))
+        if self._href:
+            self.links.append(self._href)
+            self.links_with_text.append((self._href, text))
+        self._href = None
+        self._parts = []
+        self._active_tag = None
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag.lower() != "a":
+        lower = tag.lower()
+        if lower not in {"a", "button", "input"}:
             return
-        href = dict(attrs).get("href")
-        if href:
-            self._href = urljoin(self.base_url, href)
-            self._parts = []
+        attrs_map = {str(key).lower(): str(value or "") for key, value in attrs}
+        target = _action_url_from_attrs(self.base_url, attrs_map)
+        label = (
+            attrs_map.get("value")
+            or attrs_map.get("aria-label")
+            or attrs_map.get("title")
+            or ""
+        )
+        if lower == "a" and not target:
+            return
+        self._href = target
+        self._parts = [label] if label else []
+        self._active_tag = lower
+        if lower == "input":
+            self._finish()
 
     def handle_data(self, data: str) -> None:
-        if self._href:
+        if self._active_tag:
             self._parts.append(data)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() != "a" or not self._href:
+        if not self._active_tag or tag.lower() != self._active_tag:
             return
-        url = self._href
-        text = " ".join("".join(self._parts).split())
-        self.links.append(url)
-        self.links_with_text.append((url, text))
-        self._href = None
-        self._parts = []
+        self._finish()
 
 
 def _is_public_http_url(url: str) -> bool:
@@ -311,6 +349,16 @@ def _caleprocure_package_url(url: str) -> str | None:
     )
 
 
+def _find_caleprocure_event_package_target(base_url: str, html: str) -> str | None:
+    """Return the target of a visible "View Event Package" control when present."""
+    parser = _LinkParser(base_url)
+    parser.feed(html)
+    for target, text in parser.controls + [(url, text) for url, text in parser.links_with_text]:
+        if "view event package" in text.lower():
+            return target
+    return None
+
+
 def _looks_like_caleprocure_download(link: str, text: str) -> bool:
     if _looks_like_file_url(link):
         return True
@@ -347,11 +395,22 @@ def discover_caleprocure_event_files(
     session = opener or _cookie_opener()
 
     # Establish the same guest session a normal browser gets from the friendly page.
+    # Prefer the actual visible "View Event Package" control if the page exposes
+    # one. Some Cal eProcure pages render it as a button rather than a plain anchor.
+    # The deterministic PeopleSoft relay remains the fallback when the control has
+    # no usable target or the friendly shell rejects non-browser clients.
     try:
-        _read_html(url, timeout=timeout, max_html_bytes=max_html_bytes, opener=session)
+        landing_url, landing_html = _read_html(
+            url,
+            timeout=timeout,
+            max_html_bytes=max_html_bytes,
+            opener=session,
+        )
+        if landing_html:
+            detected = _find_caleprocure_event_package_target(landing_url, landing_html)
+            if detected and _is_public_http_url(detected):
+                package_url = detected
     except Exception:
-        # The friendly shell occasionally rejects non-browser clients while the
-        # public event-package relay remains reachable. Try the relay anyway.
         pass
 
     final_url, html = _read_html(package_url, timeout=timeout, max_html_bytes=max_html_bytes, opener=session)
