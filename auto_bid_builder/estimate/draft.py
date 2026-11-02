@@ -310,6 +310,11 @@ def _line_is_auto_generated(line: EstimateLine) -> bool:
     return "AUTO-SCOPE:" in note
 
 
+def _line_has_manual_edit_marker(line: EstimateLine) -> bool:
+    note = str(line.estimator_note or "")
+    return "MANUAL-EDIT:" in note or "MANUAL:" in note
+
+
 def _remove_stale_quote_outputs(root: Path) -> None:
     output = root / "output"
     for name in (
@@ -340,13 +345,13 @@ def refresh_estimate_after_analysis(root: str | Path) -> dict[str, Any]:
         return {"status": "no_estimate", "line_count": 0}
 
     auto_generated = bool(draft.lines) and all(_line_is_auto_generated(line) for line in draft.lines)
-    estimator_confirmed = (
-        draft.scope_review_confirmed
-        or draft.pricing_profile_confirmed
-        or draft.tax_rate_confirmed
-    )
+    manually_edited = any(_line_has_manual_edit_marker(line) for line in draft.lines)
 
-    if auto_generated and not estimator_confirmed:
+    # Confirmation checkboxes do not turn machine-generated scope into manual scope.
+    # If every line still carries AUTO-SCOPE provenance and none carries an explicit
+    # manual-edit marker, rebuild it from the newest review even if an earlier quote
+    # had been "confirmed". This is what clears legacy false-positive estimates.
+    if auto_generated and not manually_edited:
         count = rebuild_itemized_scope_from_workspace(root, draft)
         return {
             "status": "rebuilt_auto_generated",
