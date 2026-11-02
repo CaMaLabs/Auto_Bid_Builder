@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
 from html.parser import HTMLParser
 import itertools
 import json
@@ -149,6 +150,64 @@ def _normalize(record: dict, *, api_key: str, hydrate_description: bool) -> Oppo
             "point_of_contacts": contacts,
         },
     )
+
+
+def _posted_day(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+    return parsed.strftime("%m/%d/%Y")
+
+
+def get_sam_opportunity_by_notice_id(
+    *,
+    api_key: str,
+    notice_id: str,
+    posted_date: str | None = None,
+    hydrate_description: bool = False,
+) -> Opportunity | None:
+    """Hydrate one SAM notice from the public API, including resourceLinks.
+
+    CSV/Data Services exports omit attachment URLs. The public Opportunities API
+    accepts noticeid and returns resourceLinks, which are direct attachment download
+    URLs. Supplying the CSV posted date keeps the required API date window narrow and
+    avoids spending requests on broad searches.
+    """
+    notice_id = str(notice_id or "").strip()
+    if not api_key:
+        raise ValueError("SAM.gov API key is required")
+    if not notice_id:
+        return None
+
+    day = _posted_day(posted_date)
+    if day:
+        posted_from = posted_to = day
+    else:
+        today = date.today()
+        posted_from = (today - timedelta(days=364)).strftime("%m/%d/%Y")
+        posted_to = today.strftime("%m/%d/%Y")
+
+    params = {
+        "api_key": api_key,
+        "noticeid": notice_id,
+        "postedFrom": posted_from,
+        "postedTo": posted_to,
+        "limit": 10,
+        "offset": 0,
+    }
+    payload = _get_json(f"{SAM_SEARCH_URL}?{urlencode(params)}")
+    rows = list(payload.get("opportunitiesData") or [])
+    if not rows:
+        return None
+    record = next(
+        (row for row in rows if str(row.get("noticeId") or "").strip().lower() == notice_id.lower()),
+        rows[0],
+    )
+    return _normalize(record, api_key=api_key, hydrate_description=hydrate_description)
 
 
 def _search_once(
