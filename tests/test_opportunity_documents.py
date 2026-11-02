@@ -2,6 +2,7 @@ from pathlib import Path
 
 from auto_bid_builder.bid_workspace import create_workspace, load_manifest
 from auto_bid_builder.opportunities import documents
+from auto_bid_builder.opportunities.models import Opportunity
 
 
 def test_pull_opportunity_documents_downloads_and_registers_files(tmp_path: Path, monkeypatch):
@@ -238,3 +239,93 @@ def test_caleprocure_view_event_package_without_target_falls_back():
     )
     assert fallback is not None
     assert "AUC_ID=789" in fallback
+
+
+def test_sam_csv_pull_hydrates_notice_and_downloads_resource_links(tmp_path: Path, monkeypatch):
+    row = {
+        "opportunity": {
+            "source": "sam.gov CSV",
+            "external_id": "NOTICE-CSV",
+            "title": "Federal Millwork",
+            "posted_date": "2026-10-31 12:00:00",
+            "bid_due_date": "2026-11-20T12:00:00-08:00",
+            "url": "https://sam.gov/workspace/contract/opp/NOTICE-CSV/view",
+            "attachments": [],
+            "metadata": {"solicitation_number": "SOL-CSV"},
+        }
+    }
+    root = create_workspace(tmp_path, row)
+    calls: list[dict] = []
+
+    def fake_hydrate(**kwargs):
+        calls.append(kwargs)
+        return Opportunity(
+            source="sam.gov",
+            external_id="NOTICE-CSV",
+            title="Federal Millwork",
+            posted_date="2026-10-31",
+            bid_due_date="2026-11-20T12:00:00-08:00",
+            url="https://example.gov/bid-documents",
+            attachments=(
+                "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/file-1/download",
+            ),
+            metadata={
+                "solicitation_number": "SOL-CSV",
+                "additional_info_link": "https://example.gov/bid-documents",
+            },
+        )
+
+    monkeypatch.setattr(documents, "get_sam_opportunity_by_notice_id", fake_hydrate)
+    monkeypatch.setattr(documents, "_is_public_http_url", lambda _url: True)
+    monkeypatch.setattr(documents, "discover_listing_files", lambda url, **kwargs: [])
+
+    def fake_download(url, destination, **kwargs):
+        if "file-1" not in url:
+            return None
+        target = destination / "plans.pdf"
+        target.write_bytes(b"%PDF-1.4\nsynthetic plans\n%%EOF")
+        return target
+
+    monkeypatch.setattr(documents, "_download", fake_download)
+
+    result = documents.pull_opportunity_documents(
+        root,
+        row,
+        sam_api_key="saved-key",
+    )
+
+    assert calls == [
+        {
+            "api_key": "saved-key",
+            "notice_id": "NOTICE-CSV",
+            "posted_date": "2026-10-31 12:00:00",
+            "hydrate_description": False,
+        }
+    ]
+    assert result.downloaded_count == 1
+    assert (root / "bid_docs" / "plans.pdf").exists()
+
+    manifest = load_manifest(root)
+    stored = manifest["opportunity"]["opportunity"]
+    assert stored["attachments"] == [
+        "https://sam.gov/api/prod/opps/v3/opportunities/resources/files/file-1/download"
+    ]
+    assert stored["metadata"]["additional_info_link"] == "https://example.gov/bid-documents"
+
+
+def test_sam_csv_pull_explains_missing_api_key(tmp_path: Path):
+    row = {
+        "opportunity": {
+            "source": "sam.gov CSV",
+            "external_id": "NOTICE-NOKEY",
+            "title": "Federal Millwork",
+            "url": "",
+            "attachments": [],
+        }
+    }
+    root = create_workspace(tmp_path, row)
+
+    result = documents.pull_opportunity_documents(root, row)
+
+    assert result.downloaded_count == 0
+    assert any("SAM.gov API key" in error for error in result.errors)
