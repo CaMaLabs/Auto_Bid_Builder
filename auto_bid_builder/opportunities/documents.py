@@ -13,7 +13,8 @@ from typing import Iterable
 from urllib.parse import quote, unquote, urljoin, urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
-from ..bid_workspace import add_documents
+from ..bid_workspace import add_documents, load_manifest, save_manifest
+from .providers.sam import get_sam_opportunity_by_notice_id
 
 
 USER_AGENT = "AutoBidBuilder/0.4 (+https://github.com/CaMaLabs/Auto_Bid_Builder)"
@@ -479,12 +480,54 @@ def _unique_urls(values: Iterable[str]) -> list[str]:
     return result
 
 
+def _merge_hydrated_sam_opportunity(root: Path, opportunity_row: dict, hydrated) -> dict:
+    """Merge useful live SAM fields back into a CSV-originated workspace record."""
+    target = opportunity_row.get("opportunity", opportunity_row)
+    fresh = hydrated.to_dict()
+    for key in (
+        "title", "description", "organization", "posted_date", "bid_due_date",
+        "street_address", "city", "state", "postal_code", "naics_code",
+        "classification_code", "url",
+    ):
+        value = fresh.get(key)
+        if value and not target.get(key):
+            target[key] = value
+
+    attachments = _unique_urls(list(target.get("attachments") or []) + list(fresh.get("attachments") or []))
+    target["attachments"] = attachments
+
+    metadata = dict(target.get("metadata") or {})
+    for key, value in dict(fresh.get("metadata") or {}).items():
+        if value and not metadata.get(key):
+            metadata[key] = value
+    target["metadata"] = metadata
+
+    try:
+        manifest = load_manifest(root)
+        stored = manifest.get("opportunity", {})
+        stored_target = stored.get("opportunity", stored)
+        if isinstance(stored_target, dict):
+            stored_target.clear()
+            stored_target.update(target)
+            manifest["opportunity"] = stored
+            save_manifest(root, manifest)
+            (root / "opportunity.json").write_text(
+                __import__("json").dumps(stored, indent=2),
+                encoding="utf-8",
+            )
+    except Exception:
+        # Hydration should still be useful for this pull even if persistence fails.
+        pass
+    return target
+
+
 def pull_opportunity_documents(
     root: str | Path,
     opportunity_row: dict,
     *,
     timeout: float = 30.0,
     max_file_mb: int = 250,
+    sam_api_key: str | None = None,
 ) -> ProjectFilePullResult:
     """Best-effort download of public project files already linked by an opportunity.
 
@@ -496,9 +539,38 @@ def pull_opportunity_documents(
     the normal manual/provider-login workflow instead.
     """
     result = ProjectFilePullResult()
+    root = Path(root)
     opportunity = opportunity_row.get("opportunity", opportunity_row)
+
+    source = str(opportunity.get("source") or "").strip().lower()
+    notice_id = str(opportunity.get("external_id") or "").strip()
+    if source.startswith("sam.gov") and notice_id and not opportunity.get("attachments"):
+        if sam_api_key:
+            try:
+                hydrated = get_sam_opportunity_by_notice_id(
+                    api_key=sam_api_key,
+                    notice_id=notice_id,
+                    posted_date=str(opportunity.get("posted_date") or ""),
+                    hydrate_description=False,
+                )
+            except Exception as exc:
+                result.errors.append(f"SAM.gov notice hydration: {type(exc).__name__}: {exc}")
+            else:
+                if hydrated is not None:
+                    opportunity = _merge_hydrated_sam_opportunity(root, opportunity_row, hydrated)
+        elif source == "sam.gov csv":
+            result.errors.append(
+                "SAM.gov CSV records do not contain attachment URLs. Save a SAM.gov API key in Sources & Settings so Pull files can hydrate this notice."
+            )
+
     direct = list(opportunity.get("attachments") or [])
-    listing = str(opportunity.get("url") or "").strip()
+    metadata = opportunity.get("metadata") if isinstance(opportunity.get("metadata"), dict) else {}
+    listing_candidates = [
+        str(metadata.get("additional_info_link") or "").strip(),
+        str(opportunity.get("url") or "").strip(),
+    ]
+    listing_candidates = [value for value in _unique_urls(listing_candidates) if value]
+    listing = listing_candidates[0] if listing_candidates else ""
     is_caleprocure = _caleprocure_event_parts(listing) is not None if listing else False
     session = _cookie_opener() if is_caleprocure else None
 
@@ -517,13 +589,13 @@ def pull_opportunity_documents(
             else:
                 discovered.extend(nested or [value])
 
-    if listing:
+    for listing in listing_candidates:
         try:
             discovered.extend(discover_listing_files(listing, timeout=timeout, opener=session))
         except Exception as exc:
             result.errors.append(f"{listing}: {type(exc).__name__}: {exc}")
 
-        if is_caleprocure:
+        if _caleprocure_event_parts(listing) is not None:
             try:
                 discovered.extend(discover_caleprocure_event_files(listing, timeout=timeout, opener=session))
             except Exception as exc:
