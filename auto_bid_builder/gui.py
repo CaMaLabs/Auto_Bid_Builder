@@ -14,6 +14,7 @@ from .bid_workspace import add_documents, analyze_workspace, create_workspace, l
 from .estimate.draft import load_estimate
 from .estimate.wizard import launch_estimator
 from .opportunities.documents import pull_opportunity_documents
+from .opportunities.import_csv import import_sam_opportunity_csv
 from .opportunities.sync import sync_opportunities
 from .settings import AppSettings, ProviderSettings, SecretStore, load_settings, save_settings
 from .updater import apply_update, check_for_updates
@@ -65,6 +66,7 @@ class AutoBidBuilderApp(tk.Tk):
             self.header_status.set(message)
         for button_name in (
             "sync_button",
+            "import_csv_button",
             "check_update_button",
             "install_update_button",
             "analyze_bid_button",
@@ -202,6 +204,8 @@ class AutoBidBuilderApp(tk.Tk):
         toolbar.pack(fill="x", pady=(0, 8))
         self.sync_button = ttk.Button(toolbar, text="Find jobs now", command=self.sync_opportunities)
         self.sync_button.pack(side="left")
+        self.import_csv_button = ttk.Button(toolbar, text="Import SAM CSV", command=self.import_sam_csv)
+        self.import_csv_button.pack(side="left", padx=(6, 0))
         ttk.Button(toolbar, text="Open original listing", command=self.open_selected_opportunity).pack(side="left", padx=6)
         ttk.Button(toolbar, text="Start bid from selected job", command=self.start_bid).pack(side="left")
         self.opportunity_summary = tk.StringVar(value="No job search run yet.")
@@ -226,6 +230,34 @@ class AutoBidBuilderApp(tk.Tk):
             lambda: sync_opportunities(self.settings, self.secrets),
             self._render_opportunities,
             message="Looking for jobs JTI may want to bid...",
+        )
+
+    def import_sam_csv(self) -> None:
+        filename = filedialog.askopenfilename(
+            parent=self,
+            title="Import SAM.gov Contract Opportunities CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not filename:
+            return
+        self.settings = load_settings()
+        path = Path(filename)
+        self._run_background(
+            lambda: import_sam_opportunity_csv(
+                path,
+                preferred_states=set(self.settings.preferred_states),
+                minimum_score=self.settings.minimum_score,
+            ),
+            self._sam_csv_imported,
+            message=f"Scanning {path.name} for JTI-relevant opportunities...",
+        )
+
+    def _sam_csv_imported(self, payload: dict) -> None:
+        self._render_opportunities(payload)
+        scanned = int(payload.get("rows_scanned", 0) or 0)
+        shown = int(payload.get("total_shown", 0) or 0)
+        self.status.set(
+            f"Imported SAM CSV: scanned {scanned:,} row(s); {shown:,} met the current review threshold."
         )
 
     def _render_opportunities(self, payload: dict) -> None:
