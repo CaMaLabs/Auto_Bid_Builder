@@ -61,18 +61,47 @@ def _get_description(url: str, api_key: str, *, timeout: float = 30.0) -> str:
     return text[:50000]
 
 
-def _place(record: dict) -> tuple[str | None, str | None, str | None]:
-    place = record.get("placeOfPerformance") or {}
+def _place(record: dict) -> tuple[str | None, str | None, str | None, str | None]:
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    place = record.get("placeOfPerformance") or data.get("placeOfPerformance") or {}
     city_obj = place.get("city") or {}
     state_obj = place.get("state") or {}
     city = city_obj.get("name") if isinstance(city_obj, dict) else city_obj
     state = state_obj.get("code") if isinstance(state_obj, dict) else state_obj
     postal = place.get("zip") or place.get("zipcode")
-    return city, state, postal
+    street = (
+        place.get("streetAddress")
+        or place.get("street_address")
+        or place.get("address")
+    )
+    return street, city, state, postal
+
+
+def _point_of_contacts(record: dict) -> list[dict]:
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    raw = record.get("pointOfContact") or data.get("pointOfContact") or []
+    if isinstance(raw, dict):
+        raw = [raw]
+    contacts: list[dict] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        contacts.append(
+            {
+                "type": item.get("type"),
+                "title": item.get("title"),
+                "name": item.get("fullname") or item.get("fullName") or item.get("name"),
+                "email": item.get("email"),
+                "phone": item.get("phone"),
+                "fax": item.get("fax"),
+            }
+        )
+    return contacts
 
 
 def _normalize(record: dict, *, api_key: str, hydrate_description: bool) -> Opportunity:
-    city, state, postal = _place(record)
+    street, city, state, postal = _place(record)
+    contacts = _point_of_contacts(record)
     description_url = record.get("description")
     description = ""
     if hydrate_description and description_url:
@@ -100,6 +129,7 @@ def _normalize(record: dict, *, api_key: str, hydrate_description: bool) -> Oppo
         organization=str(organization).strip() if organization else None,
         posted_date=record.get("postedDate"),
         bid_due_date=record.get("responseDeadLine") or record.get("reponseDeadLine"),
+        street_address=street,
         city=city,
         state=state,
         postal_code=postal,
@@ -114,6 +144,9 @@ def _normalize(record: dict, *, api_key: str, hydrate_description: bool) -> Oppo
             "active": record.get("active"),
             "description_url": description_url,
             "sam_ui_link": record.get("uiLink"),
+            "primary_contact": contacts[0] if contacts else None,
+            "secondary_contact": contacts[1] if len(contacts) > 1 else None,
+            "point_of_contacts": contacts,
         },
     )
 
