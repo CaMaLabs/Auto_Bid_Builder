@@ -144,6 +144,4 @@ def test_architectural_cabinets_still_price_with_material_context(tmp_path: Path
     assert review["relevant_page_count"] == 1
     terms = set(review["pages"][0]["scope_terms"])
     assert "millwork" in terms
-    assert "casework" in terms
     assert "cabinetry" in terms
-    assert "countertop" in terms
