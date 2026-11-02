@@ -468,9 +468,13 @@ class AutoBidBuilderApp(tk.Tk):
                 messagebox.showerror("Project files", str(exc))
                 return
         self._run_background(
-            lambda: pull_opportunity_documents(root, opportunity_row or {}),
+            lambda: pull_opportunity_documents(
+                root,
+                opportunity_row or {},
+                sam_api_key=self.secrets.get("sam", "api_key"),
+            ),
             self._project_files_pulled,
-            message="Checking the project listing for plans, specs, addenda, and bid files...",
+            message="Checking the project listing and source API for plans, specs, addenda, and bid files...",
         )
 
     def _project_files_pulled(self, result) -> None:
@@ -484,7 +488,8 @@ class AutoBidBuilderApp(tk.Tk):
                 self.analyze_current_bid()
             return
         if errors:
-            self.status.set("No public files were downloaded. The listing may require a login; add files manually or configure that bid service in Settings.")
+            detail = str(errors[0])
+            self.status.set(f"No public files were downloaded. {detail}")
         else:
             self.status.set("No direct public project files were found on the listing. Add plans/specs manually if needed.")
 
