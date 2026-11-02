@@ -109,3 +109,88 @@ def test_pull_uses_caleprocure_event_package_discovery(tmp_path: Path, monkeypat
     result = documents.pull_opportunity_documents(root, row)
     assert result.downloaded_count == 1
     assert (root / "bid_docs" / "plans.pdf").exists()
+
+
+def test_listing_discovery_follows_one_nested_document_page(monkeypatch):
+    pages = {
+        "https://example.com/project/1": (
+            "https://example.com/project/1",
+            '<html><body>'
+            '<a href="/about">About</a>'
+            '<a href="/bid-documents">Bid Documents</a>'
+            '</body></html>',
+        ),
+        "https://example.com/bid-documents": (
+            "https://example.com/bid-documents",
+            '<html><body>'
+            '<a href="/files/plans.pdf">Plans</a>'
+            '<a href="/download?id=42">Download Specifications</a>'
+            '</body></html>',
+        ),
+    }
+
+    monkeypatch.setattr(documents, "_is_public_http_url", lambda _url: True)
+    monkeypatch.setattr(
+        documents,
+        "_read_html",
+        lambda url, **kwargs: pages[url],
+    )
+
+    found = documents.discover_listing_files("https://example.com/project/1")
+
+    assert "https://example.com/files/plans.pdf" in found
+    assert "https://example.com/download?id=42" in found
+    assert "https://example.com/about" not in found
+
+
+def test_listing_discovery_does_not_recurse_beyond_nested_document_page(monkeypatch):
+    pages = {
+        "https://example.com/project/1": (
+            "https://example.com/project/1",
+            '<a href="/bid-documents">Bid Documents</a>',
+        ),
+        "https://example.com/bid-documents": (
+            "https://example.com/bid-documents",
+            '<a href="/more-documents">More Documents</a>',
+        ),
+    }
+
+    monkeypatch.setattr(documents, "_is_public_http_url", lambda _url: True)
+    monkeypatch.setattr(documents, "_read_html", lambda url, **kwargs: pages[url])
+
+    found = documents.discover_listing_files("https://example.com/project/1")
+
+    assert found == []
+
+
+def test_intermediate_page_detection_requires_same_host_and_document_hint():
+    assert documents._looks_like_document_page(
+        "https://example.com/project/123/documents",
+        "Project Documents",
+        parent_url="https://example.com/project/123",
+    )
+    assert not documents._looks_like_document_page(
+        "https://example.com/about",
+        "About",
+        parent_url="https://example.com/project/123",
+    )
+    assert not documents._looks_like_document_page(
+        "https://other.example.net/documents",
+        "Bid Documents",
+        parent_url="https://example.com/project/123",
+    )
+
+
+def test_download_action_detection_accepts_extensionless_attachment_links():
+    assert documents._looks_like_download_action(
+        "https://example.com/file/download?id=123",
+        "Download Plans",
+    )
+    assert documents._looks_like_download_action(
+        "https://example.com/attachment?id=456",
+        "Attachment",
+    )
+    assert not documents._looks_like_download_action(
+        "https://example.com/register",
+        "Register",
+    )
