@@ -285,6 +285,25 @@ def _candidate_lines_from_review(root: Path) -> list[EstimateLine]:
     return lines
 
 
+def rebuild_itemized_scope_from_workspace(root: str | Path, draft: EstimateDraft) -> int:
+    """Replace generated scope rows from the latest document review and re-price them.
+
+    Quote metadata and the current labor-rate profile are preserved. This is an
+    explicit estimator action because it replaces the existing scope lines.
+    """
+    root = Path(root)
+    draft.lines = _candidate_lines_from_review(root)
+    from .autoprice import apply_auto_pricing
+
+    if draft.lines:
+        apply_auto_pricing(draft, overwrite=False, collapse_generated=False)
+    draft.scope_review_confirmed = False
+    draft.pricing_profile_confirmed = False
+    draft.tax_rate_confirmed = False
+    save_estimate(root, draft)
+    return len(draft.lines)
+
+
 def create_estimate_from_workspace(root: str | Path, project_title: str | None = None) -> EstimateDraft:
     root = Path(root)
     if project_title is None:
