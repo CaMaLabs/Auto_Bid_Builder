@@ -534,6 +534,25 @@ class EstimateWizard(tk.Toplevel):
             )
             return
 
+        identity = payload.get("project_identity") or {}
+        if identity.get("status") == "conflict":
+            messagebox.showerror(
+                "Wrong project files — quote blocked",
+                "The project selected for this bid does not match the project number found in its PDFs.\n\n"
+                + "\n".join(identity.get("errors") or [])
+                + "\n\nMove or remove documents from the wrong project and run Analyze documents again.",
+                parent=self,
+            )
+            return
+        if payload.get("errors") or (payload.get("estimate_refresh") or {}).get("status") == "refresh_failed":
+            messagebox.showerror(
+                "Incomplete document analysis — quote blocked",
+                "Some documents could not be analyzed or the saved estimate could not be refreshed. "
+                "Review the document errors before generating a quote.",
+                parent=self,
+            )
+            return
+
         refreshed = load_estimate(self.workspace)
         if refreshed is not None:
             self.draft = refreshed
@@ -555,7 +574,11 @@ class EstimateWizard(tk.Toplevel):
             )
             return
 
-        html_path, pdf_path = write_jti_quote(self.workspace, self.draft)
+        try:
+            html_path, pdf_path = write_jti_quote(self.workspace, self.draft)
+        except Exception as exc:
+            messagebox.showerror("Quote generation blocked", str(exc), parent=self)
+            return
         warnings = self.draft.warnings()
         if warnings:
             messagebox.showwarning(
