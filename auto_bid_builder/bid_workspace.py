@@ -139,6 +139,7 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
     destination = root / "bid_docs"
     destination.mkdir(exist_ok=True)
     added: list[Path] = []
+    manifest_changed = False
     known = {str(item.get("stored_name", "")).lower() for item in manifest.get("documents", [])}
     for source_value in sources:
         source = Path(source_value)
@@ -168,6 +169,7 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
             record = {"original_name": source.name, "stored_name": target.name, "added_at": _utc_now(), "kind": target.suffix.lower().lstrip(".") or "file"}
             manifest.setdefault("documents", []).append(record)
             known.add(target.name.lower())
+            manifest_changed = True
         if target.suffix.lower() == ".zip":
             try:
                 extracted = _extract_bid_zip(target, destination)
@@ -180,7 +182,7 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
                 if record is not None:
                     record["extracted_count"] = len(extracted)
                     record["extracted_folder"] = f"{target.stem}_extracted"
-    if added:
+    if added or manifest_changed:
         manifest.setdefault("workflow", {})["documents_added"] = True
         manifest.setdefault("analysis", {})["status"] = "needs_run"
         save_manifest(root, manifest)
