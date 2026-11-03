@@ -11,6 +11,7 @@ from typing import Iterable
 import xml.etree.ElementTree as ET
 import zipfile
 
+from .storage import write_json
 from .analysis.scope import SCOPE_ANALYSIS_VERSION, scan_pdf, scan_text
 from .validation.project_identity import check_workspace_project_identity
 
@@ -92,7 +93,7 @@ def load_manifest(root: str | Path) -> dict:
 def save_manifest(root: str | Path, manifest: dict) -> Path:
     path = Path(root) / MANIFEST_NAME
     manifest["updated_at"] = _utc_now()
-    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    write_json(path, manifest)
     return path
 
 
@@ -185,6 +186,10 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
     if added or manifest_changed:
         manifest.setdefault("workflow", {})["documents_added"] = True
         manifest.setdefault("analysis", {})["status"] = "needs_run"
+        for key in ("documents_reviewed", "scope_review_complete", "estimate_review_complete", "quote_ready"):
+            manifest.setdefault("workflow", {})[key] = False
+        from .estimate.draft import _remove_stale_quote_outputs
+        _remove_stale_quote_outputs(root)
         save_manifest(root, manifest)
     return added
 
@@ -284,18 +289,29 @@ def document_fingerprint(root: str | Path) -> str:
 def analyze_workspace(root: str | Path) -> dict:
     root = Path(root)
     manifest = load_manifest(root)
-    pdfs = sorted((root / "bid_docs").glob("**/*.pdf"))
-    docx_files = sorted((root / "bid_docs").glob("**/*.docx"))
+    previous = {}
+    try:
+        previous = json.loads((root / "output" / ANALYSIS_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    fingerprint = document_fingerprint(root)
+    opportunity = manifest.get("opportunity", {})
+    files = sorted(p for p in (root / "bid_docs").rglob("*") if p.is_file())
+    pdfs = [p for p in files if p.suffix.lower() == ".pdf"]
+    docx_files = [p for p in files if p.suffix.lower() == ".docx"]
     all_rows: list[dict] = []
     errors: list[dict[str, str]] = []
     for pdf in pdfs:
         try:
-            all_rows.extend(asdict(row) for row in scan_pdf(pdf))
+            for row in scan_pdf(pdf):
+                record = asdict(row)
+                record["source"] = pdf.relative_to(root / "bid_docs").as_posix()
+                all_rows.append(record)
         except Exception as exc:
             errors.append({"file": str(pdf.relative_to(root / "bid_docs")), "error": f"{type(exc).__name__}: {exc}"})
     for docx in docx_files:
         try:
-            row = scan_text(_docx_text(docx), source=docx.name)
+            row = scan_text(_docx_text(docx), source=docx.relative_to(root / "bid_docs").as_posix())
             if row is not None:
                 all_rows.append(asdict(row))
         except Exception as exc:
@@ -306,13 +322,14 @@ def analyze_workspace(root: str | Path) -> dict:
     identity = check_workspace_project_identity(root)
     payload = {
         "generated_at": _utc_now(), "analysis_engine_version": SCOPE_ANALYSIS_VERSION,
-        "document_fingerprint": document_fingerprint(root),
+        "document_fingerprint": fingerprint, "opportunity_snapshot": opportunity,
         "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "relevant_page_count": len(pages), "review_only_count": len(review_only), "errors": errors,
         "project_identity": identity,
         "pages": pages, "review_only": review_only,
     }
-    (root / "output" / ANALYSIS_NAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (root / "output").mkdir(parents=True, exist_ok=True)
+    write_json(root / "output" / ANALYSIS_NAME, payload)
     (root / "output" / ANALYSIS_MARKDOWN_NAME).write_text(_review_markdown(root, payload), encoding="utf-8")
 
     # A fresh document review must invalidate stale quote/estimate output. If the
@@ -321,7 +338,23 @@ def analyze_workspace(root: str | Path) -> dict:
     # force them back through estimator review instead of silently overwriting them.
     try:
         from .estimate.draft import refresh_estimate_after_analysis
-        estimate_refresh = refresh_estimate_after_analysis(root)
+        unchanged = (
+            previous.get("analysis_engine_version") == SCOPE_ANALYSIS_VERSION
+            and previous.get("document_fingerprint") == fingerprint
+            and previous.get("opportunity_snapshot") == opportunity
+            and previous.get("pages") == json.loads(json.dumps(pages))
+            and previous.get("review_only") == json.loads(json.dumps(review_only))
+            and previous.get("project_identity") == identity
+            and not previous.get("errors") and not errors
+            and identity.get("status") != "conflict"
+            and previous.get("estimate_refresh", {}).get("status") != "refresh_failed"
+        )
+        if unchanged:
+            from .estimate.draft import load_estimate
+            draft = load_estimate(root)
+            estimate_refresh = {"status": "unchanged", "line_count": len(draft.lines) if draft else 0}
+        else:
+            estimate_refresh = refresh_estimate_after_analysis(root)
     except Exception as exc:
         estimate_refresh = {
             "status": "refresh_failed",
@@ -329,7 +362,7 @@ def analyze_workspace(root: str | Path) -> dict:
             "error": f"{type(exc).__name__}: {exc}",
         }
     payload["estimate_refresh"] = estimate_refresh
-    (root / "output" / ANALYSIS_NAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    write_json(root / "output" / ANALYSIS_NAME, payload)
 
     analysis = manifest.setdefault("analysis", {})
     reviewed_count = len(pdfs) + len(docx_files)
@@ -342,7 +375,10 @@ def analyze_workspace(root: str | Path) -> dict:
     })
     workflow = manifest.setdefault("workflow", {})
     workflow["documents_added"] = bool(manifest.get("documents")) or bool(reviewed_count)
-    workflow["documents_reviewed"] = bool(reviewed_count)
+    workflow["documents_reviewed"] = bool(reviewed_count) and not errors
+    if estimate_refresh.get("status") != "unchanged":
+        for key in ("scope_review_complete", "estimate_review_complete", "quote_ready"):
+            workflow[key] = False
     save_manifest(root, manifest)
     return payload
 
@@ -387,20 +423,23 @@ def workspace_status(root: str | Path) -> dict:
     review_path = root / "output" / ANALYSIS_NAME
     review_engine_version = 0
     reviewed_fingerprint = ""
+    reviewed_opportunity = None
     if review_path.exists():
         try:
             review_payload = json.loads(review_path.read_text(encoding="utf-8"))
             review_engine_version = int(review_payload.get("analysis_engine_version", 0) or 0)
             reviewed_fingerprint = str(review_payload.get("document_fingerprint") or "")
+            reviewed_opportunity = review_payload.get("opportunity_snapshot")
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             review_engine_version = 0
     current_fingerprint = document_fingerprint(root)
     analysis_current = (
         review_engine_version == SCOPE_ANALYSIS_VERSION
         and reviewed_fingerprint == current_fingerprint
+        and reviewed_opportunity == manifest.get("opportunity", {})
     )
     analysis_status = analysis.get("status", "not_run")
-    if pdfs and review_path.exists() and not analysis_current:
+    if review_path.exists() and not analysis_current:
         analysis_status = "stale"
 
     return {
@@ -408,6 +447,7 @@ def workspace_status(root: str | Path) -> dict:
         "title": manifest.get("opportunity", {}).get("opportunity", manifest.get("opportunity", {})).get("title") or root.name,
         "file_count": len(files), "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "analysis_status": analysis_status,
+        "estimate_refresh_status": analysis.get("estimate_refresh_status"),
         "analysis_engine_version": review_engine_version,
         "current_analysis_engine_version": SCOPE_ANALYSIS_VERSION,
         "analysis_current": analysis_current,
