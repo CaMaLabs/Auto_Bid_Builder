@@ -581,20 +581,20 @@ class EstimateWizard(tk.Toplevel):
             self._load_fields()
             self._refresh_lines()
 
-        if not any(line.included for line in self.draft.lines):
-            messagebox.showwarning(
-                "No included JTI scope",
-                "There are no included scope items to quote. The old quote was removed. "
-                "Review the detected evidence or manually add and include verified JTI scope.",
-                parent=self,
-            )
-            return
         if not self.draft.lines:
             messagebox.showwarning(
                 "No priceable JTI scope detected",
                 "The current document analysis found no priceable JTI millwork scope. "
                 "The stale quote was removed and a new customer quote was not generated.\n\n"
                 "Review the bid report or add estimator-confirmed scope manually if JTI work is actually present.",
+                parent=self,
+            )
+            return
+        if not any(line.included for line in self.draft.lines):
+            messagebox.showwarning(
+                "No included JTI scope",
+                "There are no included scope items to quote. The old quote was removed. "
+                "Review the detected evidence or manually add and include verified JTI scope.",
                 parent=self,
             )
             return
