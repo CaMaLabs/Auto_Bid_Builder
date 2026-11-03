@@ -10,7 +10,7 @@ from typing import Iterable
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .analysis.scope import scan_pdf, scan_text
+from .analysis.scope import SCOPE_ANALYSIS_VERSION, scan_pdf, scan_text
 
 
 MANIFEST_NAME = "bid_workspace.json"
@@ -254,7 +254,8 @@ def analyze_workspace(root: str | Path) -> dict:
     pages = [row for row in all_rows if _is_priceable_scope(row)]
     review_only = [row for row in all_rows if not _is_priceable_scope(row)]
     payload = {
-        "generated_at": _utc_now(), "pdf_count": len(pdfs), "docx_count": len(docx_files),
+        "generated_at": _utc_now(), "analysis_engine_version": SCOPE_ANALYSIS_VERSION,
+        "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "relevant_page_count": len(pages), "review_only_count": len(review_only), "errors": errors,
         "pages": pages, "review_only": review_only,
     }
