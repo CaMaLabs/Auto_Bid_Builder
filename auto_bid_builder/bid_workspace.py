@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -119,6 +120,19 @@ def _extract_bid_zip(archive: Path, destination: Path) -> list[Path]:
     return extracted
 
 
+def _same_file_contents(left: Path, right: Path) -> bool:
+    """Compare identically named imports to avoid inflating a bid on repeated pulls."""
+    if left.stat().st_size != right.stat().st_size:
+        return False
+    def digest(path: Path) -> bytes:
+        result = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                result.update(chunk)
+        return result.digest()
+    return digest(left) == digest(right)
+
+
 def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]:
     root = Path(root)
     manifest = load_manifest(root)
@@ -132,9 +146,16 @@ def add_documents(root: str | Path, sources: Iterable[str | Path]) -> list[Path]
             continue
         target = destination / source.name
         if target.resolve() == source.resolve():
-            added.append(target)
+            # Already inside bid_docs; don't duplicate its manifest entry.
+            pass
         else:
             if target.exists():
+                try:
+                    if _same_file_contents(source, target):
+                        # Repeated import of the same PDF/ZIP is idempotent.
+                        continue
+                except OSError:
+                    pass
                 stem, suffix = target.stem, target.suffix
                 index = 2
                 while target.exists():
