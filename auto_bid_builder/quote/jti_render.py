@@ -264,7 +264,7 @@ def _line_block_html(draft: EstimateDraft, line) -> str:
     reference = _reference_text(line)
     description = escape(line.description)
     if reference:
-        description += f"<div class='ref'>Ref: {escape(reference)} — reference page appended to PDF</div>"
+        description += f"<div class='ref'>Ref: {escape(reference)}</div>"
     return (
         "<div class='lineblock'>"
         "<div class='bar'><span>Item</span><span>Description</span><span>Qty</span><span>Each</span><span>Code</span><span>Tax Each</span><span>Amount</span></div>"
@@ -456,7 +456,7 @@ def _write_pdf(
         while index < len(lines):
             line = lines[index]
             reference = _reference_text(line)
-            combined_text = line.description + (f"\nRef: {reference} — reference page appended" if reference else "")
+            combined_text = line.description + (f"\nRef: {reference}" if reference else "")
             text_lines = max(1, (len(combined_text) + 57) // 58)
             block_h = max(45.0, 28.0 + text_lines * 9.5)
             reserve_for_notes = 125.0 if index == len(lines) - 1 else 0.0
