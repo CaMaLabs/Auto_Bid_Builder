@@ -9,6 +9,9 @@ from auto_bid_builder.extract.signals import extract_signals
 from auto_bid_builder.ingest.pdf import extract_pdf_pages
 
 
+SCOPE_ANALYSIS_VERSION = 4
+
+
 # High-precision fabrication/scope anchors. Generic words such as "panel" and
 # "counter" are handled separately because they create many false positives in
 # electrical, accessibility, playground, and structural documents.
