@@ -260,6 +260,27 @@ def _review_markdown(root: Path, payload: dict) -> str:
     return "\n".join(lines)
 
 
+def document_fingerprint(root: str | Path) -> str:
+    """Fast change token for the exact bid PDFs/DOCX being analyzed.
+
+    File size and nanosecond timestamps make this inexpensive even for large plan
+    sets. It changes when documents are added, removed or replaced; unlike an
+    analysis-engine version, it also detects changed input files.
+    """
+    root = Path(root)
+    bid_docs = root / "bid_docs"
+    records: list[tuple[str, int, int]] = []
+    for path in bid_docs.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in {".pdf", ".docx"}:
+            continue
+        stat = path.stat()
+        records.append((path.relative_to(bid_docs).as_posix().lower(), stat.st_size, stat.st_mtime_ns))
+    records.sort()
+    return hashlib.sha256(
+        json.dumps(records, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def analyze_workspace(root: str | Path) -> dict:
     root = Path(root)
     manifest = load_manifest(root)
@@ -285,6 +306,7 @@ def analyze_workspace(root: str | Path) -> dict:
     identity = check_workspace_project_identity(root)
     payload = {
         "generated_at": _utc_now(), "analysis_engine_version": SCOPE_ANALYSIS_VERSION,
+        "document_fingerprint": document_fingerprint(root),
         "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "relevant_page_count": len(pages), "review_only_count": len(review_only), "errors": errors,
         "project_identity": identity,
@@ -364,13 +386,19 @@ def workspace_status(root: str | Path) -> dict:
 
     review_path = root / "output" / ANALYSIS_NAME
     review_engine_version = 0
+    reviewed_fingerprint = ""
     if review_path.exists():
         try:
             review_payload = json.loads(review_path.read_text(encoding="utf-8"))
             review_engine_version = int(review_payload.get("analysis_engine_version", 0) or 0)
+            reviewed_fingerprint = str(review_payload.get("document_fingerprint") or "")
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             review_engine_version = 0
-    analysis_current = review_engine_version == SCOPE_ANALYSIS_VERSION
+    current_fingerprint = document_fingerprint(root)
+    analysis_current = (
+        review_engine_version == SCOPE_ANALYSIS_VERSION
+        and reviewed_fingerprint == current_fingerprint
+    )
     analysis_status = analysis.get("status", "not_run")
     if pdfs and review_path.exists() and not analysis_current:
         analysis_status = "stale"
@@ -383,6 +411,8 @@ def workspace_status(root: str | Path) -> dict:
         "analysis_engine_version": review_engine_version,
         "current_analysis_engine_version": SCOPE_ANALYSIS_VERSION,
         "analysis_current": analysis_current,
+        "project_identity_status": analysis.get("project_identity_status", "unknown"),
+        "document_fingerprint": current_fingerprint,
         "relevant_page_count": int(analysis.get("relevant_page_count", 0) or 0),
         "review_only_count": int(analysis.get("review_only_count", 0) or 0),
         "workflow": workflow,
