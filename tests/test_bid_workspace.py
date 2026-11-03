@@ -249,3 +249,29 @@ def test_reanalysis_preserves_manual_estimate_but_marks_it_stale(tmp_path: Path)
     assert refreshed.pricing_profile_confirmed is False
     assert refreshed.tax_rate_confirmed is False
     assert "STALE-SCOPE:" in refreshed.general_notes
+
+
+def test_workspace_status_marks_legacy_analysis_stale(tmp_path: Path):
+    root = _workspace(tmp_path)
+    source = tmp_path / "plans.pdf"
+    _pdf(source, "ARCHITECTURAL MILLWORK CASEWORK")
+    add_documents(root, [source])
+
+    # Simulate a review generated before analysis-engine versioning existed.
+    (root / "output" / "bid_review.json").write_text(
+        '{"generated_at":"2026-11-01T00:00:00+00:00","pages":[]}',
+        encoding="utf-8",
+    )
+    manifest = load_manifest(root)
+    manifest["analysis"]["status"] = "complete"
+    from auto_bid_builder.bid_workspace import save_manifest
+    save_manifest(root, manifest)
+
+    status = workspace_status(root)
+    assert status["analysis_status"] == "stale"
+    assert status["analysis_current"] is False
+
+    analyze_workspace(root)
+    refreshed = workspace_status(root)
+    assert refreshed["analysis_current"] is True
+    assert refreshed["analysis_engine_version"] == refreshed["current_analysis_engine_version"]
