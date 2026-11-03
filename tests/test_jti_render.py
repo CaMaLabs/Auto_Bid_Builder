@@ -39,7 +39,9 @@ def test_jti_quote_uses_familiar_customer_columns(tmp_path: Path):
     assert "JEFFREY TROTT INDUSTRIES" in html
     assert "Internal confidence note" not in html
     assert "plans.pdf / A8.00" in html
-    assert "reference page appended to PDF" in html
+    # A bare source reference must not falsely claim that an unavailable PDF
+    # page was actually attached to the generated quote.
+    assert "reference page appended to PDF" not in html
     assert pdf_path.exists()
     assert pdf_path.stat().st_size > 500
 
