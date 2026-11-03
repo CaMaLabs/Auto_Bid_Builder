@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .analysis.scope import SCOPE_ANALYSIS_VERSION, scan_pdf, scan_text
+from .validation.project_identity import check_workspace_project_identity
 
 
 MANIFEST_NAME = "bid_workspace.json"
@@ -199,6 +200,11 @@ def _review_markdown(root: Path, payload: dict) -> str:
         f"Potential new JTI scope rows: {len(payload.get('pages', []))}",
         f"Review-only demolition/adjacent rows: {len(payload.get('review_only', []))}", "",
     ]
+    identity = payload.get("project_identity") or {}
+    if identity.get("status") == "conflict":
+        lines.extend(["## STOP — PROJECT IDENTITY MISMATCH", ""])
+        lines.extend(f"- {message}" for message in identity.get("errors", []))
+        lines.extend(["", "This bid must not be quoted until the documents and selected opportunity refer to the same project.", ""])
     errors = payload.get("errors", [])
     if errors:
         lines.extend(["## Files that need attention", ""])
@@ -253,10 +259,12 @@ def analyze_workspace(root: str | Path) -> dict:
     all_rows.sort(key=lambda row: (-int(row.get("relevance_score", 0)), row.get("source", ""), int(row.get("page", 0))))
     pages = [row for row in all_rows if _is_priceable_scope(row)]
     review_only = [row for row in all_rows if not _is_priceable_scope(row)]
+    identity = check_workspace_project_identity(root)
     payload = {
         "generated_at": _utc_now(), "analysis_engine_version": SCOPE_ANALYSIS_VERSION,
         "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "relevant_page_count": len(pages), "review_only_count": len(review_only), "errors": errors,
+        "project_identity": identity,
         "pages": pages, "review_only": review_only,
     }
     (root / "output" / ANALYSIS_NAME).write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -285,6 +293,7 @@ def analyze_workspace(root: str | Path) -> dict:
         "last_run_at": payload["generated_at"], "pdf_count": len(pdfs), "docx_count": len(docx_files),
         "relevant_page_count": len(pages), "review_only_count": len(review_only), "error_count": len(errors),
         "estimate_refresh_status": estimate_refresh.get("status"),
+        "project_identity_status": identity.get("status"),
     })
     workflow = manifest.setdefault("workflow", {})
     workflow["documents_added"] = bool(manifest.get("documents")) or bool(reviewed_count)
