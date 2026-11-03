@@ -467,6 +467,26 @@ def _download(url: str, destination: Path, *, timeout: float, max_bytes: int, op
         if target.stat().st_size == 0:
             target.unlink(missing_ok=True)
             return None
+
+        # Some procurement APIs return PDFs as application/octet-stream from an
+        # extensionless /download endpoint. Normalize from the real file header
+        # so those attachments are actually scanned, not silently stored as .bin.
+        if target.suffix.lower() not in DOWNLOADABLE_EXTENSIONS:
+            with target.open("rb") as handle:
+                signature = handle.read(8)
+            detected = (
+                ".pdf" if signature.startswith(b"%PDF-")
+                else ".zip" if signature.startswith(b"PK\\x03\\x04")
+                else ""
+            )
+            if detected:
+                candidate = target.with_suffix(detected)
+                suffix_index = 2
+                while candidate.exists():
+                    candidate = target.with_name(f"{target.stem} ({suffix_index}){detected}")
+                    suffix_index += 1
+                target.rename(candidate)
+                target = candidate
         return target
 
 
@@ -494,7 +514,9 @@ def _merge_hydrated_sam_opportunity(root: Path, opportunity_row: dict, hydrated)
         if value and not target.get(key):
             target[key] = value
 
-    attachments = _unique_urls(list(target.get("attachments") or []) + list(fresh.get("attachments") or []))
+    # Newly hydrated public resource links take priority over links cached from
+    # an old CSV import/previous SAM API response.
+    attachments = _unique_urls(list(fresh.get("attachments") or []) + list(target.get("attachments") or []))
     target["attachments"] = attachments
 
     metadata = dict(target.get("metadata") or {})
@@ -545,7 +567,7 @@ def pull_opportunity_documents(
 
     source = str(opportunity.get("source") or "").strip().lower()
     notice_id = str(opportunity.get("external_id") or "").strip()
-    if source.startswith("sam.gov") and notice_id and not opportunity.get("attachments"):
+    if source.startswith("sam.gov") and notice_id:
         if sam_api_key:
             try:
                 hydrated = get_sam_opportunity_by_notice_id(
@@ -580,7 +602,9 @@ def pull_opportunity_documents(
         value = str(url or "").strip()
         if not value:
             continue
-        if _looks_like_file_url(value):
+        if source.startswith("sam.gov") or _looks_like_file_url(value):
+            # SAM resourceLinks are already direct attachment endpoints, commonly
+            # extensionless. Do not attempt to parse a PDF response as HTML first.
             discovered.append(value)
         else:
             try:
