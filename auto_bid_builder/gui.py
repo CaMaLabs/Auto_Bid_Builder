@@ -575,11 +575,23 @@ class AutoBidBuilderApp(tk.Tk):
     def open_quote_preview(self) -> None:
         if self.current_workspace is None:
             return
+        try:
+            status = workspace_status(self.current_workspace)
+        except Exception as exc:
+            messagebox.showerror("Auto Bid Builder", str(exc))
+            return
+        if status.get("pdf_count") and not status.get("analysis_current", False):
+            messagebox.showwarning(
+                "Quote preview is stale",
+                "This bid was analyzed by an older scope engine. The existing quote preview may contain stale scope/pricing and will not be opened.\n\n"
+                "Open Build estimate and click Generate JTI quote; the app will re-analyze the documents automatically before producing a new quote.",
+            )
+            return
         pdf = self.current_workspace / "output" / "quote_preview.pdf"
         html = self.current_workspace / "output" / "quote_preview.html"
         target = pdf if pdf.exists() else html if html.exists() else None
         if target is None:
-            messagebox.showinfo("Auto Bid Builder", "Open Build estimate and click Generate quote preview first.")
+            messagebox.showinfo("Auto Bid Builder", "Open Build estimate and click Generate JTI quote first.")
             return
         self._open_path(target)
 
