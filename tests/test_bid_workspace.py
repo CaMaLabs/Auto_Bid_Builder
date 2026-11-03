@@ -275,3 +275,33 @@ def test_workspace_status_marks_legacy_analysis_stale(tmp_path: Path):
     refreshed = workspace_status(root)
     assert refreshed["analysis_current"] is True
     assert refreshed["analysis_engine_version"] == refreshed["current_analysis_engine_version"]
+
+
+def test_reimporting_exact_same_pdf_does_not_double_count_scope(tmp_path: Path):
+    root = _workspace(tmp_path)
+    source = tmp_path / "A8.10.pdf"
+    _pdf(source, "A8.10 ARCHITECTURAL MILLWORK, FURNISH NEW CASEWORK.")
+    first = add_documents(root, [source])
+    second = add_documents(root, [source])
+    assert len(first) == 1
+    assert second == []
+    assert len(list((root / "bid_docs").glob("*.pdf"))) == 1
+    assert len(load_manifest(root)["documents"]) == 1
+    review = analyze_workspace(root)
+    assert review["relevant_page_count"] == 1
+
+
+def test_changed_bid_documents_invalidate_previous_analysis(tmp_path: Path):
+    root = _workspace(tmp_path)
+    source = tmp_path / "A8.10.pdf"
+    _pdf(source, "A8.10 ARCHITECTURAL MILLWORK, FURNISH NEW CASEWORK.")
+    added = add_documents(root, [source])
+    analyze_workspace(root)
+    assert workspace_status(root)["analysis_current"] is True
+
+    # External replacement inside bid_docs with a different size should make
+    # both the old review and its quote preview invalid.
+    added[0].write_bytes(added[0].read_bytes() + b"additional revision")
+    refreshed = workspace_status(root)
+    assert refreshed["analysis_current"] is False
+    assert refreshed["analysis_status"] == "stale"
