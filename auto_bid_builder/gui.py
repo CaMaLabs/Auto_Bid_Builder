@@ -10,6 +10,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import webbrowser
 
+from . import __version__
 from .bid_workspace import add_documents, analyze_workspace, create_workspace, load_manifest, workspace_status
 from .estimate.draft import load_estimate
 from .estimate.wizard import launch_estimator
@@ -23,7 +24,7 @@ from .updater import apply_update, check_for_updates
 class AutoBidBuilderApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Auto Bid Builder")
+        self.title(f"JTI Auto Bid Builder — v{__version__}")
         self.geometry("1240x820")
         self.minsize(1000, 680)
         self.settings: AppSettings = load_settings()
@@ -42,7 +43,7 @@ class AutoBidBuilderApp(tk.Tk):
     def _build_ui(self) -> None:
         header = ttk.Frame(self, padding=(14, 12, 14, 4))
         header.pack(fill="x")
-        ttk.Label(header, text="Auto Bid Builder", font=("Segoe UI", 18, "bold")).pack(side="left")
+        ttk.Label(header, text=f"Auto Bid Builder   v{__version__}", font=("Segoe UI", 18, "bold")).pack(side="left")
         ttk.Button(header, text="Getting started", command=self.show_onboarding).pack(side="right", padx=(8, 0))
         self.header_status = tk.StringVar(value="Ready")
         ttk.Label(header, textvariable=self.header_status).pack(side="right")
@@ -423,8 +424,12 @@ class AutoBidBuilderApp(tk.Tk):
         else:
             self.bid_step2_var.set("No files yet. Click Pull files from listing or Add plans/specs.")
 
-        if status["analysis_status"] in {"complete", "partial"}:
-            self.bid_step3_var.set(f"✓ Document review complete. {status['relevant_page_count']} millwork-relevant page(s) identified.")
+        if status.get("project_identity_status") == "conflict":
+            self.bid_step3_var.set("STOP: Opportunity project number conflicts with uploaded bid PDFs. A quote cannot be generated.")
+        elif status["analysis_status"] in {"complete", "partial"}:
+            self.bid_step3_var.set(f"✓ Document review complete. {status['relevant_page_count']} potential JTI scope page(s) identified.")
+        elif status.get("analysis_status") == "stale":
+            self.bid_step3_var.set("Document review is STALE: source files or the analysis engine changed. Run Analyze documents.")
         elif status["pdf_count"]:
             self.bid_step3_var.set("PDFs are ready. Click Analyze documents.")
         else:
@@ -535,7 +540,17 @@ class AutoBidBuilderApp(tk.Tk):
         self._refresh_bid_tab()
         refresh = payload.get("estimate_refresh") or {}
         refresh_status = str(refresh.get("status") or "")
-        if payload.get("pdf_count", 0) == 0:
+        identity = payload.get("project_identity") or {}
+        if identity.get("status") == "conflict":
+            messagebox.showerror(
+                "Wrong project — quote blocked",
+                "The selected opportunity and the uploaded documents have different project numbers.\n\n"
+                + "\n".join(identity.get("errors") or [])
+                + "\n\nRemove the unrelated documents or open the correct project workspace.",
+                parent=self,
+            )
+            self.status.set("STOP: Project identity mismatch. Quote generation is blocked.")
+        elif payload.get("pdf_count", 0) == 0:
             self.status.set("No PDFs found. Add plan/spec PDFs and run review again.")
         elif refresh_status == "rebuilt_auto_generated":
             self.status.set(
