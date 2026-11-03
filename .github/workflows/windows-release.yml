@@ -86,6 +86,37 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler was not found." }
           & $iscc "/DAppVersion=$env:APP_VERSION" "installer\AutoBidBuilder.iss"
 
+      - name: Verify upgrade replaces installed prior version
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP "AutoBidBuilder-v0.4.13-Setup.exe"
+          $baselineUrl = "https://github.com/CaMaLabs/Auto_Bid_Builder/releases/download/v0.4.13/JTI_Auto_Bid_Builder_Setup.exe"
+          Invoke-WebRequest -Uri $baselineUrl -OutFile $baseline -MaximumRedirection 10
+          $installDir = Join-Path $env:RUNNER_TEMP "abb_upgrade_test"
+          $installerArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+            "/CLOSEAPPLICATIONS", "/FORCECLOSEAPPLICATIONS", "/NORESTARTAPPLICATIONS",
+            "/DIR=$installDir")
+          $old = Start-Process -FilePath $baseline -ArgumentList $installerArgs -Wait -PassThru
+          if ($old.ExitCode -ne 0) { throw "Previous-version install failed: $($old.ExitCode)" }
+          $installedExe = Join-Path $installDir "AutoBidBuilder.exe"
+          if (-not (Test-Path $installedExe)) { throw "Previous installed EXE was not found." }
+          $oldHash = (Get-FileHash -Algorithm SHA256 $installedExe).Hash
+
+          $newSetup = "dist/installer/JTI_Auto_Bid_Builder_Setup.exe"
+          $upgrade = Start-Process -FilePath $newSetup -ArgumentList $installerArgs -Wait -PassThru
+          if ($upgrade.ExitCode -ne 0) { throw "New-version upgrade failed: $($upgrade.ExitCode)" }
+
+          $actualHash = (Get-FileHash -Algorithm SHA256 $installedExe).Hash
+          $expectedHash = (Get-FileHash -Algorithm SHA256 "dist/AutoBidBuilder.exe").Hash
+          if ($actualHash -ne $expectedHash) {
+            throw "In-place upgrade did not replace installed executable."
+          }
+          if ($oldHash -eq $actualHash) {
+            throw "The installed executable was unchanged after upgrading."
+          }
+          $smoke = Start-Process -FilePath $installedExe -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) { throw "Updated installed EXE smoke test failed." }
+
       - name: Upload Windows build artifacts
         uses: actions/upload-artifact@v4
         with:
