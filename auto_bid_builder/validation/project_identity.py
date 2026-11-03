@@ -81,7 +81,7 @@ def check_workspace_project_identity(root: str | Path) -> dict:
     expected = _opportunity_id(opportunity)
 
     observed: list[tuple[str, str]] = []
-    files = sorted((root / "bid_docs").rglob("*.pdf"))
+    files = sorted(p for p in (root / "bid_docs").rglob("*") if p.is_file() and p.suffix.lower() == ".pdf")
     for path in files:
         if value := _pdf_project_id(path):
             found_id, evidence = value

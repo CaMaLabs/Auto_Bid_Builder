@@ -50,11 +50,12 @@ def _find_bid_document(root: Path, source_name: str) -> Path | None:
     bid_docs = root / "bid_docs"
     if not bid_docs.exists():
         return None
+    exact = (bid_docs / source_name).resolve()
+    if exact.is_relative_to(bid_docs.resolve()) and exact.is_file():
+        return exact
     wanted = source_name.strip().lower()
-    for path in bid_docs.rglob("*"):
-        if path.is_file() and path.name.lower() == wanted:
-            return path
-    return None
+    matches = [path for path in bid_docs.rglob("*") if path.is_file() and path.name.lower() == wanted]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _reference_pages(root: Path, draft: EstimateDraft) -> tuple[QuoteReferencePage, ...]:

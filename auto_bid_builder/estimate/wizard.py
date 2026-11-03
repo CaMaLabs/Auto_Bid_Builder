@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import math
+from queue import Empty, Queue
+import threading
 from statistics import median
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -42,6 +44,8 @@ class EstimateWizard(tk.Toplevel):
         self.geometry("1260x840")
         self.minsize(1040, 700)
         self.transient(parent)
+        self.grab_set()
+        self._generating = False
         self._build_ui()
         self._load_fields()
         self._refresh_lines()
@@ -535,22 +539,48 @@ class EstimateWizard(tk.Toplevel):
         return True
 
     def generate_preview(self) -> None:
+        if self._generating:
+            return
         if not self.save():
             return
 
-        # Final quote generation always re-runs document analysis with the current
-        # engine. This prevents an old saved estimate/quote from surviving an app
-        # update simply because the user did not click Analyze documents again.
-        try:
-            payload = analyze_workspace(self.workspace)
-        except Exception as exc:
-            messagebox.showerror(
-                "Quote validation failed",
-                f"Could not re-analyze the bid documents before generating the quote.\n\n{type(exc).__name__}: {exc}",
-                parent=self,
-            )
-            return
+        self._generating = True
+        progress = tk.Toplevel(self)
+        progress.title("Validating quote")
+        progress.transient(self)
+        progress.protocol("WM_DELETE_WINDOW", lambda: None)
+        progress.grab_set()
+        ttk.Label(progress, text="Reviewing current documents before generating the quote…", padding=20).pack()
+        bar = ttk.Progressbar(progress, mode="indeterminate", length=360)
+        bar.pack(padx=20, pady=(0, 20))
+        bar.start()
+        results = Queue()
 
+        def work() -> None:
+            try:
+                results.put((True, analyze_workspace(self.workspace)))
+            except Exception as exc:
+                results.put((False, exc))
+
+        def poll() -> None:
+            try:
+                success, result = results.get_nowait()
+            except Empty:
+                self.after(75, poll)
+                return
+            self._generating = False
+            bar.stop()
+            progress.destroy()
+            self.grab_set()
+            if not success:
+                messagebox.showerror("Quote validation failed", str(result), parent=self)
+                return
+            self._finish_preview(result)
+
+        threading.Thread(target=work, daemon=True).start()
+        self.after(75, poll)
+
+    def _finish_preview(self, payload: dict) -> None:
         identity = payload.get("project_identity") or {}
         if identity.get("status") == "conflict":
             messagebox.showerror(

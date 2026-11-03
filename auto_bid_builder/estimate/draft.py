@@ -11,6 +11,8 @@ from typing import Any
 
 import fitz
 
+from auto_bid_builder.storage import write_json
+
 
 ESTIMATE_DRAFT_NAME = "estimate_draft.json"
 QUOTE_PREVIEW_HTML = "quote_preview.html"
@@ -192,7 +194,16 @@ def _estimate_path(root: str | Path) -> Path:
 
 def save_estimate(root: str | Path, draft: EstimateDraft) -> Path:
     path = _estimate_path(root)
-    path.write_text(json.dumps(draft.to_dict(), indent=2), encoding="utf-8")
+    data = draft.to_dict()
+    previous = None
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    write_json(path, data)
+    if previous != data:
+        _remove_stale_quote_outputs(Path(root))
     return path
 
 
@@ -339,7 +350,7 @@ def _line_is_auto_generated(line: EstimateLine) -> bool:
 
 def _line_has_manual_edit_marker(line: EstimateLine) -> bool:
     note = str(line.estimator_note or "")
-    return "MANUAL-EDIT:" in note or "MANUAL:" in note
+    return "MANUAL-EDIT:" in note or "MANUAL:" in note or "TAKEOFF-VERIFIED:" in note
 
 
 def _remove_stale_quote_outputs(root: Path) -> None:
@@ -366,8 +377,8 @@ def refresh_estimate_after_analysis(root: str | Path) -> dict[str, Any]:
     their review confirmations are cleared and stale quote outputs are removed.
     """
     root = Path(root)
-    draft = load_estimate(root)
     _remove_stale_quote_outputs(root)
+    draft = load_estimate(root)
     if draft is None:
         return {"status": "no_estimate", "line_count": 0}
 

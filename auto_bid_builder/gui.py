@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from queue import Empty, Queue
 from pathlib import Path
 import subprocess
 import sys
@@ -33,9 +34,12 @@ class AutoBidBuilderApp(tk.Tk):
         self._selected_provider: ProviderSettings | None = None
         self._provider_secret_vars: dict[str, tk.StringVar] = {}
         self._busy = False
+        self._background_results = Queue()
         self.current_workspace: Path | None = None
+        self._review_rows = {}
 
         self._build_ui()
+        self.after(75, self._poll_background)
         self.after(350, self._maybe_show_onboarding)
         self.after(900, self._startup_update_check)
 
@@ -66,6 +70,8 @@ class AutoBidBuilderApp(tk.Tk):
             self.status.set(message)
             self.header_status.set(message)
         for button_name in (
+            "start_bid_button",
+            "open_bid_button",
             "sync_button",
             "import_csv_button",
             "check_update_button",
@@ -88,11 +94,25 @@ class AutoBidBuilderApp(tk.Tk):
             try:
                 result = work()
             except Exception as exc:
-                self.after(0, lambda: self._background_error(exc))
-                return
-            self.after(0, lambda: self._background_done(result, done))
+                self._background_results.put((False, exc, done))
+            else:
+                self._background_results.put((True, result, done))
 
         threading.Thread(target=runner, daemon=True).start()
+
+    def _poll_background(self) -> None:
+        # All Tk calls stay on the UI thread, including failure delivery.
+        try:
+            while True:
+                success, result, done = self._background_results.get_nowait()
+                if success:
+                    self._background_done(result, done)
+                else:
+                    self._background_error(result)
+        except Empty:
+            pass
+        finally:
+            self.after(75, self._poll_background)
 
     def _background_error(self, exc: Exception) -> None:
         self._set_busy(False, "Ready")
@@ -103,7 +123,10 @@ class AutoBidBuilderApp(tk.Tk):
 
     def _background_done(self, result, done) -> None:
         self._set_busy(False, "Ready")
-        done(result)
+        try:
+            done(result)
+        except Exception as exc:
+            self._background_error(exc)
 
     def _open_path(self, path: Path) -> None:
         path = path.resolve()
@@ -208,7 +231,8 @@ class AutoBidBuilderApp(tk.Tk):
         self.import_csv_button = ttk.Button(toolbar, text="Import SAM CSV", command=self.import_sam_csv)
         self.import_csv_button.pack(side="left", padx=(6, 0))
         ttk.Button(toolbar, text="Open original listing", command=self.open_selected_opportunity).pack(side="left", padx=6)
-        ttk.Button(toolbar, text="Start bid from selected job", command=self.start_bid).pack(side="left")
+        self.start_bid_button = ttk.Button(toolbar, text="Start bid from selected job", command=self.start_bid)
+        self.start_bid_button.pack(side="left")
         self.opportunity_summary = tk.StringVar(value="No job search run yet.")
         ttk.Label(toolbar, textvariable=self.opportunity_summary).pack(side="right")
 
@@ -307,6 +331,8 @@ class AutoBidBuilderApp(tk.Tk):
         webbrowser.open(url)
 
     def start_bid(self) -> None:
+        if self._busy:
+            return
         row = self._selected_opportunity()
         if not row:
             messagebox.showinfo("Auto Bid Builder", "Select the job you want to bid first.")
@@ -333,7 +359,8 @@ class AutoBidBuilderApp(tk.Tk):
         top.pack(fill="x")
         self.bid_title_var = tk.StringVar(value="No bid is open yet")
         ttk.Label(top, textvariable=self.bid_title_var, font=("Segoe UI", 15, "bold")).pack(side="left")
-        ttk.Button(top, text="Open existing bid", command=self.open_existing_bid).pack(side="right")
+        self.open_bid_button = ttk.Button(top, text="Open existing bid", command=self.open_existing_bid)
+        self.open_bid_button.pack(side="right")
         ttk.Button(top, text="Open bid folder", command=self.open_current_bid_folder).pack(side="right", padx=6)
         self.bid_path_var = tk.StringVar(value="Find a job and click Start bid, or open an existing Auto Bid Builder project.")
         ttk.Label(tab, textvariable=self.bid_path_var, wraplength=1050).pack(anchor="w", pady=(2, 8))
@@ -366,14 +393,16 @@ class AutoBidBuilderApp(tk.Tk):
 
         review = ttk.LabelFrame(tab, text="Step 4 - Pages to review first", padding=8)
         review.pack(fill="both", expand=True, pady=(7, 4))
-        columns = ("score", "file", "page", "sheet", "scope")
+        columns = ("kind", "score", "file", "page", "sheet", "scope")
         self.bid_review_tree = ttk.Treeview(review, columns=columns, show="headings", height=7)
-        headings = {"score": "Score", "file": "File", "page": "Page", "sheet": "Sheet", "scope": "Detected scope"}
-        widths = {"score": 65, "file": 250, "page": 70, "sheet": 90, "scope": 500}
+        headings = {"kind": "Review", "score": "Score", "file": "File", "page": "Page", "sheet": "Sheet", "scope": "Detected scope"}
+        widths = {"kind": 110, "score": 65, "file": 250, "page": 70, "sheet": 90, "scope": 500}
         for col in columns:
             self.bid_review_tree.heading(col, text=headings[col])
             self.bid_review_tree.column(col, width=widths[col], anchor="center" if col in {"score", "page"} else "w")
         self.bid_review_tree.pack(side="left", fill="both", expand=True)
+        self.bid_review_tree.bind("<Double-1>", self.show_scope_evidence)
+        ttk.Label(review, text="Double-click a row for source evidence.").pack(side="bottom", anchor="w")
         review_scroll = ttk.Scrollbar(review, orient="vertical", command=self.bid_review_tree.yview)
         review_scroll.pack(side="right", fill="y")
         self.bid_review_tree.configure(yscrollcommand=review_scroll.set)
@@ -388,7 +417,40 @@ class AutoBidBuilderApp(tk.Tk):
         self.estimate_button = ttk.Button(row5, text="Build estimate", command=self.open_estimator)
         self.estimate_button.pack(side="right")
 
+    def show_scope_evidence(self, _event=None) -> None:
+        selected = self.bid_review_tree.selection()
+        row = self._review_rows.get(selected[0]) if selected else None
+        if not row or self.current_workspace is None:
+            return
+        win = tk.Toplevel(self)
+        win.title("Scope evidence — estimator review")
+        win.geometry("780x540")
+        outer = ttk.Frame(win, padding=14)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(outer, text=f"{row.get('source')} • page {row.get('page')} • {row.get('sheet') or 'No sheet ID'}",
+                  wraplength=730).pack(anchor="w", pady=(0, 10))
+        text = tk.Text(outer, wrap="word", font=("Segoe UI", 10))
+        text.pack(fill="both", expand=True)
+        details = ["Detected scope: " + (", ".join(row.get("scope_terms") or []) or "None"),
+                   "", "These matches are review leads. Verify quantities, assemblies and trade responsibility in the source document."]
+        for field, label in (("demolition_terms", "Demolition / existing"),
+                             ("adjacent_review_terms", "Adjacent trade"),
+                             ("by_others_mentions", "Responsibility / exclusions")):
+            if row.get(field):
+                details.extend(["", label + ": " + ", ".join(row[field])])
+        for signal in row.get("signals") or []:
+            details.extend(["", str(signal.get("value") or ""), str(signal.get("evidence") or signal.get("context") or "")])
+        text.insert("1.0", "\n".join(details))
+        text.configure(state="disabled")
+        docs = (self.current_workspace / "bid_docs").resolve()
+        source = (docs / str(row.get("source") or "")).resolve()
+        if source.is_relative_to(docs) and source.is_file():
+            ttk.Button(outer, text="Open source document", command=lambda: self._open_path(source)).pack(side="left", pady=10)
+        ttk.Button(outer, text="Close", command=win.destroy).pack(side="right", pady=10)
+
     def open_existing_bid(self) -> None:
+        if self._busy:
+            return
         folder = filedialog.askdirectory(title="Choose an Auto Bid Builder project folder")
         if not folder:
             return
@@ -402,6 +464,7 @@ class AutoBidBuilderApp(tk.Tk):
 
     def _refresh_bid_tab(self) -> None:
         self.bid_review_tree.delete(*self.bid_review_tree.get_children())
+        self._review_rows.clear()
         if self.current_workspace is None:
             self.bid_title_var.set("No bid is open yet")
             self.bid_path_var.set("Find a job and click Start bid, or open an existing Auto Bid Builder project.")
@@ -426,11 +489,13 @@ class AutoBidBuilderApp(tk.Tk):
 
         if status.get("project_identity_status") == "conflict":
             self.bid_step3_var.set("STOP: Opportunity project number conflicts with uploaded bid PDFs. A quote cannot be generated.")
-        elif status["analysis_status"] in {"complete", "partial"}:
+        elif status["analysis_status"] == "partial":
+            self.bid_step3_var.set("Document review is incomplete. Open the review report for file errors; quote generation is blocked.")
+        elif status["analysis_status"] == "complete":
             self.bid_step3_var.set(f"✓ Document review complete. {status['relevant_page_count']} potential JTI scope page(s) identified.")
         elif status.get("analysis_status") == "stale":
             self.bid_step3_var.set("Document review is STALE: source files or the analysis engine changed. Run Analyze documents.")
-        elif status["pdf_count"]:
+        elif status["pdf_count"] or status["docx_count"]:
             self.bid_step3_var.set("PDFs are ready. Click Analyze documents.")
         else:
             self.bid_step3_var.set("Waiting for PDFs. Other files can still be kept for manual review.")
@@ -441,12 +506,15 @@ class AutoBidBuilderApp(tk.Tk):
                 payload = json.loads(review_path.read_text(encoding="utf-8"))
             except Exception:
                 payload = {}
-            for index, row in enumerate(payload.get("pages", [])[:100]):
+            rows = [("Candidate", row) for row in payload.get("pages", [])]
+            rows += [("Review only", row) for row in payload.get("review_only", [])]
+            for index, (kind, row) in enumerate(rows):
+                self._review_rows[f"review-{index}"] = row
                 self.bid_review_tree.insert(
                     "", "end", iid=f"review-{index}",
                     values=(
-                        row.get("relevance_score", ""), row.get("source", ""), row.get("page", ""),
-                        row.get("sheet") or "", ", ".join(row.get("scope_terms") or []),
+                        kind, row.get("relevance_score", ""), row.get("source", ""), row.get("page", ""),
+                        row.get("sheet") or "", ", ".join(row.get("scope_terms") or row.get("demolition_terms") or row.get("adjacent_review_terms") or []),
                     ),
                 )
 
@@ -520,7 +588,7 @@ class AutoBidBuilderApp(tk.Tk):
             messagebox.showerror("Could not add documents", str(exc))
             return
         self._refresh_bid_tab()
-        if any(path.suffix.lower() == ".pdf" for path in copied):
+        if any(path.suffix.lower() in {".pdf", ".docx"} for path in copied):
             self.analyze_current_bid()
         else:
             self.status.set(f"Added {len(copied)} document(s). Add PDFs for automatic page review.")
@@ -566,11 +634,13 @@ class AutoBidBuilderApp(tk.Tk):
             self.status.set(f"Document review complete: {payload.get('relevant_page_count', 0)} relevant page(s) identified.")
 
     def open_estimator(self) -> None:
+        if self._busy:
+            return
         if self.current_workspace is None:
             messagebox.showinfo("Auto Bid Builder", "Start or open a bid first.")
             return
         wizard = launch_estimator(self, self.current_workspace, open_path=self._open_path)
-        wizard.bind("<Destroy>", lambda _event: self.after(100, self._refresh_bid_tab), add="+")
+        wizard.bind("<Destroy>", lambda event: self.after(100, self._refresh_bid_tab) if event.widget is wizard else None, add="+")
 
     def open_current_bid_folder(self) -> None:
         if self.current_workspace is None:
@@ -595,7 +665,7 @@ class AutoBidBuilderApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Auto Bid Builder", str(exc))
             return
-        if status.get("pdf_count") and not status.get("analysis_current", False):
+        if not status.get("analysis_current", False) or status.get("analysis_status") != "complete" or status.get("estimate_refresh_status") == "refresh_failed":
             messagebox.showwarning(
                 "Quote preview is stale",
                 "This bid was analyzed by an older scope engine. The existing quote preview may contain stale scope/pricing and will not be opened.\n\n"
