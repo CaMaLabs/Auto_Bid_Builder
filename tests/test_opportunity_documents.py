@@ -329,3 +329,60 @@ def test_sam_csv_pull_explains_missing_api_key(tmp_path: Path):
 
     assert result.downloaded_count == 0
     assert any("SAM.gov API key" in error for error in result.errors)
+
+
+def test_extensionless_octet_stream_pdf_is_saved_with_pdf_extension(tmp_path: Path, monkeypatch):
+    from email.message import Message
+    from io import BytesIO
+
+    class FakeResponse(BytesIO):
+        def __init__(self):
+            super().__init__(b"%PDF-1.4\\nsynthetic PDF payload\\n%%EOF")
+            self.headers = Message()
+            self.headers["Content-Type"] = "application/octet-stream"
+
+        def geturl(self):
+            return "https://example.gov/attachments/123/download"
+
+    monkeypatch.setattr(documents, "_is_public_http_url", lambda _url: True)
+    monkeypatch.setattr(
+        documents, "_request",
+        lambda url, **kwargs: FakeResponse(),
+    )
+    result = documents._download(
+        "https://example.gov/attachments/123/download",
+        tmp_path, timeout=1, max_bytes=100_000,
+    )
+    assert result is not None
+    assert result.name == "download.pdf"
+    assert result.read_bytes().startswith(b"%PDF-")
+
+
+def test_sam_csv_extensionless_resource_links_skip_html_page_fetch(tmp_path: Path, monkeypatch):
+    row = {
+        "opportunity": {
+            "source": "sam.gov CSV",
+            "external_id": "NOTICE-DIRECT",
+            "title": "Direct attachment test",
+            "attachments": ["https://sam.gov/api/opportunities/resources/123/download"],
+        }
+    }
+    root = create_workspace(tmp_path, row)
+    monkeypatch.setattr(documents, "_is_public_http_url", lambda _url: True)
+    monkeypatch.setattr(
+        documents,
+        "discover_listing_files",
+        lambda url, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Direct SAM resources must not be fetched as HTML")
+        ),
+    )
+
+    def download(url, dest, **kwargs):
+        path = dest / "plans.pdf"
+        path.write_bytes(b"%PDF-1.4\\nsynthetic plans\\n%%EOF")
+        return path
+
+    monkeypatch.setattr(documents, "_download", download)
+    result = documents.pull_opportunity_documents(root, row)
+    assert result.downloaded_count == 1
+    assert (root / "bid_docs" / "plans.pdf").exists()
