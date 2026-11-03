@@ -95,3 +95,47 @@ def test_quote_preview_files_are_created(tmp_path: Path):
     assert pdf_path.exists()
     assert "Preview Test" in html_path.read_text(encoding="utf-8")
     assert pdf_path.stat().st_size > 500
+
+
+def test_auto_generated_unmeasured_scope_cannot_be_marked_quote_ready():
+    draft = EstimateDraft(
+        project_title="Evidence-only bid",
+        scope_review_confirmed=True,
+        pricing_profile_confirmed=True,
+        tax_rate_confirmed=True,
+        lines=[
+            EstimateLine(
+                item=1, description="Casework on A8.00",
+                material_cost=500, estimator_note="AUTO-SCOPE: page hit without actual quantity",
+            )
+        ],
+    )
+    assert not draft.ready_for_quote
+    assert any("never verified" in warning for warning in draft.warnings())
+    draft.lines[0].estimator_note += "\nMANUAL-EDIT: Estimator validated scope and quantity."
+    assert draft.ready_for_quote
+
+
+def test_empty_included_scope_and_invalid_numbers_are_rejected():
+    draft = EstimateDraft(
+        project_title="Bad values",
+        scope_review_confirmed=True,
+        pricing_profile_confirmed=True,
+        tax_rate_confirmed=True,
+        lines=[EstimateLine(item=1, description="Excluded", included=False)],
+    )
+    assert not draft.ready_for_quote
+    assert any("No scope items are included" in item for item in draft.warnings())
+
+    draft.lines = [
+        EstimateLine(
+            item=1, description="Bad numeric fields", quantity=float("nan"),
+            material_cost=-5, material_tax_rate=1.2,
+            labor_hours={"M": float("inf")},
+        )
+    ]
+    assert not draft.ready_for_quote
+    warnings = draft.warnings()
+    assert any("quantity must be a finite" in warning for warning in warnings)
+    assert any("finite and nonnegative" in warning for warning in warnings)
+    assert any("tax rate must be" in warning for warning in warnings)
