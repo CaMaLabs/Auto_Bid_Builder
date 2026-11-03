@@ -9,7 +9,7 @@ from auto_bid_builder.extract.signals import extract_signals
 from auto_bid_builder.ingest.pdf import extract_pdf_pages
 
 
-SCOPE_ANALYSIS_VERSION = 4
+SCOPE_ANALYSIS_VERSION = 5
 
 
 # High-precision fabrication/scope anchors. Generic words such as "panel" and
@@ -37,7 +37,6 @@ _CONTEXTUAL_SCOPE_TERMS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...
         re.compile(r"\bcabinets?\b", re.I),
         re.compile(
             r"\b(?:architectural|wood|plywood|veneer|laminate|plam|millwork|casework|"
-            r"base\s+cabinet|wall\s+cabinet|upper\s+cabinet|tall\s+cabinet|storage\s+cabinet|"
             r"kitchen|reception|solid\s+surface|countertop)\b",
             re.I,
         ),
@@ -70,6 +69,74 @@ _NON_MILLWORK_EQUIPMENT_CONTEXT = re.compile(
     r"enclosure|wiring|conductor|transformer)\b",
     re.I,
 )
+
+# A word such as "cabinet", "panel" or "shelves" is not a millwork scope
+# statement when it belongs to a different CSI trade. These are strong
+# disqualifiers for automatic pricing; the supporting PDFs remain available
+# to the estimator for manual review.
+_OTHER_TRADE_SECTION = re.compile(
+    r"\b(?:SECTION\s+)?(?:20|21|22|23|25|26|27|28|31|32|33)\s?\d{2}\s?\d{2}\b",
+    re.I,
+)
+_OTHER_TRADE_TITLE = re.compile(
+    r"(?im)^\s*(?:ACCESS CONTROL|VIDEO SURVEILLANCE|COMMUNICATIONS (?:EQUIPMENT|HORIZONTAL|OPTICAL)|"
+    r"DOOR HARDWARE|ELECTRICAL (?:CABINETS|POWER|SYSTEMS)|"
+    r"PLUMBING (?:FIXTURES|SPECIALTIES)|FIRE ALARM(?: SYSTEMS)?)\s*$"
+)
+_EQUIPMENT_ACCESSORIES = re.compile(
+    r"\b(?:key\s+control|hardware\s+supplier|card\s+readers?|terminal\s+strips?|"
+    r"security\s+system|access\s+control|storage\s+(?:cabinet|rack)|"
+    r"equipment\s+(?:rack|enclosure|cabinet)|disks?|tapes?|printer\s+paper|"
+    r"locking\s+cabinet|wiring\s+closet|telecommunications|steel\s+or\s+aluminum|"
+    r"louvered\s+side\s+panels?|cabling|fiber\s+optic)\b",
+    re.I,
+)
+_REFERENCE_ONLY = re.compile(
+    r"\b(?:within\s+(?:cabinets?\s+and\s+)?millwork|"
+    r"(?:fixtures|accessories|equipment),?\s+casework\s+etc\.?|"
+    r"for\s+(?:typical\s+)?backing\s*/?\s*blocking|"
+    r"coordination\s+(?:with|of)\s+(?:the\s+)?millwork)\b",
+    re.I,
+)
+_CHECKLIST_LANGUAGE = re.compile(
+    r"(?is)\b(?:CHANGE ROOM\s+YES\s+NO|Hangers/lockers/bins\s+for\s+street\s+clothes\?|"
+    r"APPENDIX\s+['\"]?C['\"]?\s+Section\s+01\s+45)\b"
+)
+_FABRICATION_VERBS = re.compile(
+    r"\b(?:provide|furnish|fabricate|construct|install|build|manufacture|supply)\b",
+    re.I,
+)
+_ARCHITECTURAL_MATERIAL = re.compile(
+    r"\b(?:architectural\s+millwork|casework|wood\s+veneer|plywood|"
+    r"plastic\s+laminate|high-pressure\s+laminate|solid\s+surface|"
+    r"melamine|mdf|hardwood|cabinetry)\b",
+    re.I,
+)
+_GLOSSARY_PAGE = re.compile(
+    r"\b(?:ARCHITECTURAL\s+ABBREVIATIONS|SYMBOL\s+LEGEND|"
+    r"MATERIAL\s+LEGEND|DRAWING\s+ABBREVIATIONS)\b",
+    re.I,
+)
+
+
+def _non_priceable_page_context(text: str) -> bool:
+    # Appendix inspection checklists and other-trade specifications must not
+    # generate JTI prices from generic nouns. Match sections near the page's
+    # start/end; a reference to another spec section in the middle is not enough.
+    if _CHECKLIST_LANGUAGE.search(text):
+        return True
+    head_tail = text[:450] + "\n" + text[-350:]
+    if _OTHER_TRADE_SECTION.search(head_tail) or _OTHER_TRADE_TITLE.search(head_tail):
+        return True
+    if _GLOSSARY_PAGE.search(text) and not re.search(
+        r"\b(?:FURNISH|FABRICATE|INSTALL|PROVIDE)\b.{0,120}\b(?:MILLWORK|CASEWORK|CABINETRY)\b",
+        text,
+        re.I | re.S,
+    ):
+        return True
+    return False
+
+
 _DEMOLITION = re.compile(r"\b(?:remove|demolish|demo|existing\s+to\s+be\s+removed|salvage)\b", re.I)
 _BY_OTHERS = re.compile(r"\b(by others|not included|electrical subcontractor|GCs?\s+electrical)\b", re.I)
 _ADJACENT_REVIEW = (
@@ -100,10 +167,20 @@ def _positive_scope_terms(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     positive: list[str] = []
     demolition: list[str] = []
 
+    if _non_priceable_page_context(text):
+        return (), ()
+
     for label, pattern in _STRONG_SCOPE_TERMS:
         for match in pattern.finditer(text):
             nearby = _context(text, match.start(), match.end())
-            if _FALSE_POSITIVE_PHRASES.search(nearby):
+            if _FALSE_POSITIVE_PHRASES.search(nearby) or _REFERENCE_ONLY.search(nearby):
+                continue
+            if label in {"shelving", "locker"} and not (
+                _ARCHITECTURAL_MATERIAL.search(nearby)
+                or (_FABRICATION_VERBS.search(nearby) and not _EQUIPMENT_ACCESSORIES.search(nearby))
+            ):
+                continue
+            if _EQUIPMENT_ACCESSORIES.search(nearby):
                 continue
             target = demolition if _DEMOLITION.search(nearby) else positive
             if label not in target:
@@ -114,7 +191,7 @@ def _positive_scope_terms(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
             nearby = _context(text, match.start(), match.end())
             if _FALSE_POSITIVE_PHRASES.search(nearby):
                 continue
-            if _NON_MILLWORK_EQUIPMENT_CONTEXT.search(nearby):
+            if _NON_MILLWORK_EQUIPMENT_CONTEXT.search(nearby) or _EQUIPMENT_ACCESSORIES.search(nearby):
                 continue
             # Generic cabinet/counter/panel references must have nearby
             # architectural fabrication/material context. This intentionally
