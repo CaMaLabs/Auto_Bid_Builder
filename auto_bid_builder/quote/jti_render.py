@@ -335,6 +335,15 @@ body {{ font-family: Arial, Helvetica, sans-serif; color:#000; font-size:10px; m
 def write_jti_quote(root: str | Path, draft: EstimateDraft) -> tuple[Path, Path]:
     """Write customer-facing JTI output and refresh the private AI-review package."""
     root = Path(root)
+    if (root / "bid_workspace.json").exists():
+        from auto_bid_builder.validation.project_identity import check_workspace_project_identity
+        identity = check_workspace_project_identity(root)
+        if identity["status"] == "conflict":
+            raise ValueError(
+                "Quote blocked: project identity mismatch. "
+                + "; ".join(identity["errors"])
+                + " Move the wrong project PDFs to the correct bid workspace and reanalyze."
+            )
     output = root / "output"
     output.mkdir(parents=True, exist_ok=True)
     html_path = output / JTI_QUOTE_HTML
