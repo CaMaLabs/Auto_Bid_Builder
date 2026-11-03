@@ -39,6 +39,8 @@ def _pdf(path: Path, text: str) -> None:
     'cabinets and millwork.\n22 05 00 - 5',
     'ARCHITECTURAL ABBREVIATIONS\nCABINET\nCOUNTERTOP\nWOOD VENEER\n'
     'ELECTRICAL PANEL\nDRAWING ABBREVIATIONS',
+    'RESTROOM FINISHES LEGEND: WV WOOD VENEER, WD SOLID WOOD, '
+    'CT CERAMIC TILE. Materials noted for legend only.',
     'GENERAL NOTE: FOR TYPICAL BACKING/BLOCKING AT VARIOUS FIXTURES, '
     'ACCESSORIES, EQUIPMENT, CASEWORK ETC. SEE DETAIL 15/A502.',
     'SECTION 27 15 00\nEach terminal strip in each cabinet, rack or panel '
