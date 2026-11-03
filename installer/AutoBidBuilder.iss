@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.4.12"
+  #define AppVersion "0.4.13"
 #endif
 
 #define AppName "JTI Auto Bid Builder"
