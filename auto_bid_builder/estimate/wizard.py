@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import webbrowser
 
+from auto_bid_builder.bid_workspace import analyze_workspace
 from auto_bid_builder.quote.jti_render import write_jti_quote
 from .autoprice import apply_auto_pricing, import_cost_detail_pdf, load_historical_examples
 from .draft import (
@@ -519,6 +520,41 @@ class EstimateWizard(tk.Toplevel):
     def generate_preview(self) -> None:
         if not self.save():
             return
+
+        # Final quote generation always re-runs document analysis with the current
+        # engine. This prevents an old saved estimate/quote from surviving an app
+        # update simply because the user did not click Analyze documents again.
+        try:
+            payload = analyze_workspace(self.workspace)
+        except Exception as exc:
+            messagebox.showerror(
+                "Quote validation failed",
+                f"Could not re-analyze the bid documents before generating the quote.\n\n{type(exc).__name__}: {exc}",
+                parent=self,
+            )
+            return
+
+        refreshed = load_estimate(self.workspace)
+        if refreshed is not None:
+            self.draft = refreshed
+            self._reset_tuning_baseline()
+            self.labor_adjust_var.set(100.0)
+            self.material_adjust_var.set(100.0)
+            self.markup_adjust_var.set(self._current_markup_percent())
+            self.install_rate_var.set(float(self.draft.labor_rates.get("I", 0.0) or 0.0))
+            self._load_fields()
+            self._refresh_lines()
+
+        if not self.draft.lines:
+            messagebox.showwarning(
+                "No priceable JTI scope detected",
+                "The current document analysis found no priceable JTI millwork scope. "
+                "The stale quote was removed and a new customer quote was not generated.\n\n"
+                "Review the bid report or add estimator-confirmed scope manually if JTI work is actually present.",
+                parent=self,
+            )
+            return
+
         html_path, pdf_path = write_jti_quote(self.workspace, self.draft)
         warnings = self.draft.warnings()
         if warnings:
