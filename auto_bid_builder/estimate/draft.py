@@ -116,6 +116,14 @@ class EstimateDraft:
         for line in self.lines:
             if not line.included:
                 continue
+            note = str(line.estimator_note or "")
+            if "AUTO-SCOPE:" in note and not (
+                "MANUAL-EDIT:" in note or "TAKEOFF-VERIFIED:" in note
+            ):
+                warnings.append(
+                    f"Item {line.item}: provisional page-level scope was never verified "
+                    "against quantities, assemblies and trade responsibility."
+                )
             if line.quantity <= 0:
                 warnings.append(f"Item {line.item}: quantity must be greater than zero.")
             if not line.description.strip():
