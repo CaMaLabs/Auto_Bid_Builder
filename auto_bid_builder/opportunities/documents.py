@@ -476,7 +476,7 @@ def _download(url: str, destination: Path, *, timeout: float, max_bytes: int, op
                 signature = handle.read(8)
             detected = (
                 ".pdf" if signature.startswith(b"%PDF-")
-                else ".zip" if signature.startswith(b"PK\\x03\\x04")
+                else ".zip" if signature.startswith(b"PK\x03\x04")
                 else ""
             )
             if detected:
