@@ -329,15 +329,32 @@ def workspace_status(root: str | Path) -> dict:
     docx_files = [p for p in files if p.suffix.lower() == ".docx"]
     analysis = manifest.get("analysis", {})
     workflow = manifest.get("workflow", {})
+
+    review_path = root / "output" / ANALYSIS_NAME
+    review_engine_version = 0
+    if review_path.exists():
+        try:
+            review_payload = json.loads(review_path.read_text(encoding="utf-8"))
+            review_engine_version = int(review_payload.get("analysis_engine_version", 0) or 0)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            review_engine_version = 0
+    analysis_current = review_engine_version == SCOPE_ANALYSIS_VERSION
+    analysis_status = analysis.get("status", "not_run")
+    if pdfs and review_path.exists() and not analysis_current:
+        analysis_status = "stale"
+
     return {
         "root": str(root),
         "title": manifest.get("opportunity", {}).get("opportunity", manifest.get("opportunity", {})).get("title") or root.name,
         "file_count": len(files), "pdf_count": len(pdfs), "docx_count": len(docx_files),
-        "analysis_status": analysis.get("status", "not_run"),
+        "analysis_status": analysis_status,
+        "analysis_engine_version": review_engine_version,
+        "current_analysis_engine_version": SCOPE_ANALYSIS_VERSION,
+        "analysis_current": analysis_current,
         "relevant_page_count": int(analysis.get("relevant_page_count", 0) or 0),
         "review_only_count": int(analysis.get("review_only_count", 0) or 0),
         "workflow": workflow,
-        "review_json": str(root / "output" / ANALYSIS_NAME),
+        "review_json": str(review_path),
         "review_markdown": str(root / "output" / ANALYSIS_MARKDOWN_NAME),
         "ai_review_package": str(root / "output" / AI_REVIEW_PACKAGE_NAME),
     }
