@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from html import escape
 import json
+import math
 from pathlib import Path
 import shutil
 from typing import Any
@@ -113,6 +114,11 @@ class EstimateDraft:
             warnings.append("Material tax rate has not been confirmed for this bid.")
         if not self.lines:
             warnings.append("No estimate lines exist yet.")
+        elif not any(line.included for line in self.lines):
+            warnings.append("No scope items are included in the quotation.")
+        for code, rate in self.labor_rates.items():
+            if not math.isfinite(float(rate or 0.0)) or float(rate or 0.0) < 0:
+                warnings.append(f"Labor rate {code}: amount must be a finite nonnegative number.")
         for line in self.lines:
             if not line.included:
                 continue
@@ -124,8 +130,20 @@ class EstimateDraft:
                     f"Item {line.item}: provisional page-level scope was never verified "
                     "against quantities, assemblies and trade responsibility."
                 )
-            if line.quantity <= 0:
-                warnings.append(f"Item {line.item}: quantity must be greater than zero.")
+            if not math.isfinite(line.quantity) or line.quantity <= 0:
+                warnings.append(f"Item {line.item}: quantity must be a finite positive number.")
+            if any(
+                not math.isfinite(float(value)) or float(value) < 0
+                for value in [
+                    line.material_cost, line.material_markup_rate, line.material_tax_rate,
+                    *line.normalized_hours().values(),
+                ]
+            ):
+                warnings.append(f"Item {line.item}: material, markup, tax, and labor hours must be finite and nonnegative.")
+            if not 0 <= line.material_tax_rate <= 1:
+                warnings.append(f"Item {line.item}: material tax rate must be between 0% and 100%.")
+            if not math.isfinite(line.manual_add):
+                warnings.append(f"Item {line.item}: manual adjustment must be finite.")
             if not line.description.strip():
                 warnings.append(f"Item {line.item}: description is blank.")
             if sum(line.normalized_hours().values()) == 0 and line.material_cost == 0 and line.manual_add == 0:
