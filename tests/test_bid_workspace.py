@@ -196,9 +196,13 @@ def test_reanalysis_replaces_stale_unreviewed_auto_estimate(tmp_path: Path):
 
     review = analyze_workspace(root)
 
+    assert review["analysis_engine_version"] >= 4
     assert review["relevant_page_count"] == 0
     assert review["estimate_refresh"]["status"] == "rebuilt_auto_generated"
     assert review["estimate_refresh"]["line_count"] == 0
+    backup = root / "estimate" / "estimate_draft.pre_reanalysis.json"
+    assert backup.exists()
+    assert "Casework / cabinetry" in backup.read_text(encoding="utf-8")
     refreshed = load_estimate(root)
     assert refreshed is not None
     assert refreshed.lines == []
