@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 from statistics import median
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -201,6 +202,11 @@ class EstimateWizard(tk.Toplevel):
             rates = {category: float(self.rate_vars[category].get().strip() or 0.0) for category in LABOR_CATEGORIES}
         except ValueError:
             messagebox.showerror("Pricing profile", "Labor rates must be numbers.", parent=self)
+            return False
+        if any(not math.isfinite(rate) or rate < 0 for rate in rates.values()):
+            messagebox.showerror(
+                "Pricing profile", "Labor rates must be finite nonnegative numbers.", parent=self
+            )
             return False
         self.draft.project_title = self.project_var.get().strip() or self.draft.project_title
         self.draft.quote_number = self.quote_var.get().strip() or "DRAFT"
@@ -473,8 +479,19 @@ class EstimateWizard(tk.Toplevel):
             except ValueError:
                 messagebox.showerror("Scope item", "Qty, costs, percentages, and labor hours must be numbers.", parent=win)
                 return
-            if quantity <= 0:
-                messagebox.showerror("Scope item", "Quantity must be greater than zero.", parent=win)
+            all_nonnegative = [quantity, material, markup, tax, *hours.values()]
+            if (
+                not all(math.isfinite(value) for value in [*all_nonnegative, manual_add])
+                or quantity <= 0
+                or any(value < 0 for value in all_nonnegative)
+                or tax > 1.0
+            ):
+                messagebox.showerror(
+                    "Scope item",
+                    "Quantity must be positive; material, markup, tax and labor must be "
+                    "finite nonnegative values. Tax cannot exceed 100%.",
+                    parent=win,
+                )
                 return
             line.description = desc.get("1.0", "end").strip()
             line.quantity = quantity
@@ -564,6 +581,14 @@ class EstimateWizard(tk.Toplevel):
             self._load_fields()
             self._refresh_lines()
 
+        if not any(line.included for line in self.draft.lines):
+            messagebox.showwarning(
+                "No included JTI scope",
+                "There are no included scope items to quote. The old quote was removed. "
+                "Review the detected evidence or manually add and include verified JTI scope.",
+                parent=self,
+            )
+            return
         if not self.draft.lines:
             messagebox.showwarning(
                 "No priceable JTI scope detected",
