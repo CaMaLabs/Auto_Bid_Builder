@@ -5,6 +5,7 @@ from datetime import date
 from html import escape
 import json
 from pathlib import Path
+import shutil
 from typing import Any
 
 import fitz
@@ -352,10 +353,20 @@ def refresh_estimate_after_analysis(root: str | Path) -> dict[str, Any]:
     # manual-edit marker, rebuild it from the newest review even if an earlier quote
     # had been "confirmed". This is what clears legacy false-positive estimates.
     if auto_generated and not manually_edited:
+        estimate_path = _estimate_path(root)
+        backup_path = estimate_path.with_name("estimate_draft.pre_reanalysis.json")
+        if estimate_path.exists():
+            try:
+                shutil.copy2(estimate_path, backup_path)
+            except OSError:
+                backup_path = None
+        else:
+            backup_path = None
         count = rebuild_itemized_scope_from_workspace(root, draft)
         return {
             "status": "rebuilt_auto_generated",
             "line_count": count,
+            "backup": str(backup_path) if backup_path is not None else None,
         }
 
     # Preserve any manual/reviewed estimate, but never let a fresh document analysis
